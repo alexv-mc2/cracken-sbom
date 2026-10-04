@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Build, unit, and offline fixture tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version: 1.26.1
+          cache: false
+      - name: Provision verification tools and authenticated engine
+        run: |
+          set -euo pipefail
+          scripts/provision-cosign.sh "$RUNNER_TEMP/cosign"
+          COSIGN="$RUNNER_TEMP/cosign" SYFT_CACHE="$RUNNER_TEMP/syft-cache" \
+            scripts/provision-syft.sh "$RUNNER_TEMP/syft"
+          python3 -m venv "$RUNNER_TEMP/schema-venv"
+          "$RUNNER_TEMP/schema-venv/bin/pip" install --require-hashes --only-binary=:all: \
+            -r tests/requirements.txt
+      - name: Test real Syft fixtures without network
+        run: |
+          set -euo pipefail
+          sudo env "PATH=$PATH" "HOME=$HOME" \
+            "GO=$(command -v go)" "SYFT=$RUNNER_TEMP/syft" \
+            "PYTHON=$RUNNER_TEMP/schema-venv/bin/python" \
+            "CRACKEN_SBOM_TEST_OUTPUT=$RUNNER_TEMP/cracken-sbom-output" \
+            unshare --net bash tests/run-tests.sh
+      - name: Cross-build supported targets without network
+        run: |
+          set -euo pipefail
+          sudo env "PATH=$PATH" "HOME=$HOME" "CRACKEN_SBOM_BUILD_DIR=$RUNNER_TEMP/cracken-sbom-builds" \
+            unshare --net bash -c '
+              set -euo pipefail
+              mkdir -p "$CRACKEN_SBOM_BUILD_DIR"
+              for platform in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+                GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off CGO_ENABLED=0 \
+                  GOOS="${platform%/*}" GOARCH="${platform#*/}" \
+                  go build -trimpath -o "$CRACKEN_SBOM_BUILD_DIR/${platform/\//-}" .
+              done
+            '

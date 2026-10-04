@@ -1,0 +1,15 @@
+Package: busybox
+Status: install ok installed
+Priority: optional
+Section: utils
+Architecture: arm64
+Version: 1:1.35.0-4+b3
+Description: Synthetic fixture package; no executable included
+
+Package: libssl3
+Status: install ok installed
+Priority: optional
+Section: libs
+Architecture: arm64
+Version: 3.0.11-1~deb12u2
+Description: Synthetic fixture package; no executable included

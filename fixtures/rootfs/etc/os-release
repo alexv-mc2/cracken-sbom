@@ -1,0 +1,4 @@
+ID=debian
+NAME="Debian GNU/Linux"
+VERSION_ID="12"
+VERSION_CODENAME=bookworm

@@ -1,0 +1,5 @@
+/bin/
+/test-output/
+/dist/
+*.test
+__pycache__/

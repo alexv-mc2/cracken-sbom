@@ -1,0 +1,246 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      expected-commit:
+        description: Reviewed full source SHA for the disposable v0.0.0-rc.1 trial
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    if: ${{ github.event_name == 'push' }}
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version: 1.26.1
+          cache: false
+      - name: Provision authenticated inventory engine
+        run: |
+          scripts/provision-cosign.sh "$RUNNER_TEMP/cosign"
+          COSIGN="$RUNNER_TEMP/cosign" SYFT_CACHE="$RUNNER_TEMP/syft-cache" \
+            scripts/provision-syft.sh "$RUNNER_TEMP/syft"
+          python3 -m venv "$RUNNER_TEMP/schema-venv"
+          "$RUNNER_TEMP/schema-venv/bin/pip" install --require-hashes --only-binary=:all: \
+            -r tests/requirements.txt
+      - name: Build four targets and inventory each exact binary offline
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          sudo env "PATH=$PATH" "HOME=$HOME" "SYFT=$RUNNER_TEMP/syft" \
+            "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" \
+            unshare --net bash scripts/build-release.sh "$RELEASE_TAG" "$RUNNER_TEMP/release"
+          sudo unshare --net "$RUNNER_TEMP/schema-venv/bin/python" \
+            scripts/validate-release-sbom.py "$RUNNER_TEMP/release"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/release/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-assets
+          path: release
+      - name: Sign the checksum manifest using GitHub OIDC
+        run: |
+          set -euo pipefail
+          scripts/provision-cosign.sh "$RUNNER_TEMP/cosign"
+          cd release
+          sha256sum --check SHA256SUMS
+          "$RUNNER_TEMP/cosign" sign-blob --yes \
+            --bundle SHA256SUMS.sigstore.json SHA256SUMS
+      - name: Retain signed trial evidence independently of platform attestation support
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: signed-release-assets
+          path: release/*
+          if-no-files-found: error
+          retention-days: 7
+      - name: Attest every release asset and the signed manifest
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        with:
+          subject-path: release/*
+      - name: Publish only after signing and provenance succeed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          prerelease=()
+          if [[ "$RELEASE_TAG" == *-* ]]; then prerelease=(--prerelease); fi
+          gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --verify-tag --title "cracken-sbom $RELEASE_TAG" \
+            --notes "Linux and macOS binaries, per-binary CycloneDX inventories, and signed checksums. Follow docs/VERIFICATION.md before extraction or execution." \
+            "${prerelease[@]}" release/*
+
+  verify-signatures:
+    needs: [build, publish]
+    if: ${{ always() && needs.build.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Provision pinned cosign
+        run: scripts/provision-cosign.sh "$RUNNER_TEMP/cosign"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: signed-release-assets
+          path: download
+      - name: Verify signed candidate bytes
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          cd download
+          "$RUNNER_TEMP/cosign" verify-blob --bundle SHA256SUMS.sigstore.json \
+            --certificate-identity "https://github.com/alexv-mc2/cracken-sbom/.github/workflows/release.yml@refs/tags/$RELEASE_TAG" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            sha256sum --check SHA256SUMS
+          else
+            shasum -a 256 --check SHA256SUMS
+          fi
+
+  verify-download:
+    needs: publish
+    permissions:
+      contents: read
+      attestations: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the published download using customer commands
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          scripts/provision-cosign.sh "$RUNNER_TEMP/cosign"
+          mkdir "$RUNNER_TEMP/download"
+          cd "$RUNNER_TEMP/download"
+          gh release download "$RELEASE_TAG" --repo alexv-mc2/cracken-sbom
+          "$RUNNER_TEMP/cosign" verify-blob --bundle SHA256SUMS.sigstore.json \
+            --certificate-identity "https://github.com/alexv-mc2/cracken-sbom/.github/workflows/release.yml@refs/tags/$RELEASE_TAG" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            sha256sum --check SHA256SUMS
+          else
+            shasum -a 256 --check SHA256SUMS
+          fi
+          for asset in SHA256SUMS SHA256SUMS.sigstore.json LICENSE NOTICE *.tar.gz *.cdx.json; do
+            gh attestation verify "$asset" --repo alexv-mc2/cracken-sbom \
+              --cert-identity "https://github.com/alexv-mc2/cracken-sbom/.github/workflows/release.yml@refs/tags/$RELEASE_TAG" \
+              --cert-oidc-issuer https://token.actions.githubusercontent.com \
+              --source-ref "refs/tags/$RELEASE_TAG" --source-digest "$GITHUB_SHA" \
+              --deny-self-hosted-runners
+          done
+          case "$(uname -s)/$(uname -m)" in
+            Linux/x86_64) platform=linux_amd64 ;;
+            Darwin/arm64) platform=darwin_arm64 ;;
+            Darwin/x86_64) platform=darwin_amd64 ;;
+            *) exit 1 ;;
+          esac
+          tar -xzf "cracken-sbom_${RELEASE_TAG#v}_${platform}.tar.gz"
+          expected="cracken-sbom ${RELEASE_TAG#v} (Syft 1.54.0)"
+          test "$(./cracken-sbom version)" = "$expected"
+          ./cracken-sbom version
+
+  verify-trial-download:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    permissions:
+      contents: read
+      attestations: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify disposable trial download; provenance remains mandatory
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_COMMIT: ${{ inputs.expected-commit }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          scripts/provision-cosign.sh "$RUNNER_TEMP/cosign"
+          mkdir "$RUNNER_TEMP/download"
+          cd "$RUNNER_TEMP/download"
+          VERSION=v0.0.0-rc.1
+          gh release download "$VERSION" --repo alexv-mc2/cracken-sbom
+          "$RUNNER_TEMP/cosign" verify-blob --bundle SHA256SUMS.sigstore.json \
+            --certificate-identity "https://github.com/alexv-mc2/cracken-sbom/.github/workflows/release.yml@refs/tags/$VERSION" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            sha256sum --check SHA256SUMS
+          else
+            shasum -a 256 --check SHA256SUMS
+          fi
+          for asset in SHA256SUMS SHA256SUMS.sigstore.json LICENSE NOTICE *.tar.gz *.cdx.json; do
+            gh attestation verify "$asset" --repo alexv-mc2/cracken-sbom \
+              --cert-identity "https://github.com/alexv-mc2/cracken-sbom/.github/workflows/release.yml@refs/tags/$VERSION" \
+              --cert-oidc-issuer https://token.actions.githubusercontent.com \
+              --source-ref "refs/tags/$VERSION" --source-digest "$EXPECTED_COMMIT" \
+              --deny-self-hosted-runners
+          done
+          case "$(uname -s)/$(uname -m)" in
+            Linux/x86_64) platform=linux_amd64 ;;
+            Darwin/arm64) platform=darwin_arm64 ;;
+            Darwin/x86_64) platform=darwin_amd64 ;;
+            *) exit 1 ;;
+          esac
+          tar -xzf "cracken-sbom_${VERSION#v}_${platform}.tar.gz"
+          expected="cracken-sbom ${VERSION#v} (Syft 1.54.0)"
+          test "$(./cracken-sbom version)" = "$expected"
+          ./cracken-sbom version

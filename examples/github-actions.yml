@@ -1,0 +1,30 @@
+# Reference only: this file is outside .github/workflows and is not activated.
+# Tools and source/firmware artifacts are provisioned on a customer-owned runner.
+# No service credentials, registry pulls, downloads, or automatic evidence upload.
+# Obtain verified CLI releases from https://github.com/alexv-mc2/cracken-sbom/releases.
+name: Local firmware SBOM (example)
+on:
+  workflow_dispatch:
+permissions: {}
+jobs:
+  local-sbom:
+    runs-on: [self-hosted, Linux]
+    steps:
+      - name: Generate locally with preverified tools
+        shell: bash
+        env:
+          LOCAL_ROOTFS: /srv/firmware/rootfs
+          VERIFIED_CLI: /opt/verified-tools/cracken-sbom
+          VERIFIED_SYFT: /opt/verified-tools/syft
+          # Retained on customer-owned runner for review/manual retrieval.
+          LOCAL_EVIDENCE_ROOT: /srv/local-sbom-evidence
+        run: |
+          set -euo pipefail
+          "$VERIFIED_CLI" generate \
+            --target-type rootfs --target "$LOCAL_ROOTFS" \
+            --target-id "firmware-${GITHUB_SHA}" \
+            --syft "$VERIFIED_SYFT" \
+            --output "$LOCAL_EVIDENCE_ROOT/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+      # No third-party Action is referenced, so there is no moving Action tag.
+      # If a customer later adds checkout/artifact actions, pin full commit SHAs.
+      # Artifact upload would transfer evidence to GitHub; it is not included here.

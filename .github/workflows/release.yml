@@ -52,7 +52,7 @@ jobs:
             unshare --net bash scripts/build-release.sh "$RELEASE_TAG" "$RUNNER_TEMP/release"
           sudo unshare --net "$RUNNER_TEMP/schema-venv/bin/python" \
             scripts/validate-release-sbom.py "$RUNNER_TEMP/release"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-assets
           path: ${{ runner.temp }}/release/*
@@ -84,7 +84,7 @@ jobs:
           "$RUNNER_TEMP/cosign" sign-blob --yes \
             --bundle SHA256SUMS.sigstore.json SHA256SUMS
       - name: Retain signed trial evidence independently of platform attestation support
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: signed-release-assets
           path: release/*

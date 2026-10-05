@@ -23,9 +23,15 @@ the CLI and Syft requires network access; generation can run offline.
 ### Windows
 
 There is no native Windows build yet. On Windows, use the Linux amd64 or arm64
-release inside WSL 2. Enable WSL 2 by running `wsl --install` in an
-administrator PowerShell session. Restart your computer if prompted, then
-follow the Linux verification and installation steps in a WSL Linux shell. See
+release inside WSL 2. For a new installation, run `wsl --install` in an
+administrator PowerShell session and restart your computer if prompted. If WSL
+is already installed, check the distro version with `wsl -l -v`; convert a
+distro to WSL 2 with `wsl --set-version <DistroName> 2`. If `wsl --install`
+shows help instead of installing a distro, list available distros with
+`wsl --list --online` and install one with `wsl --install -d <DistroName>`.
+See Microsoft's [WSL installation guide](https://learn.microsoft.com/en-us/windows/wsl/install)
+for details. Once a WSL 2 distro is available, follow the Linux verification
+and installation steps from its Linux shell. See
 [installation verification](docs/VERIFICATION.md) for the commands.
 
 For firmware scans, extract the root filesystem inside the WSL Linux filesystem,

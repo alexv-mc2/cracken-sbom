@@ -24,8 +24,10 @@ the CLI and Syft requires network access; generation can run offline.
 
 There is no native Windows build yet. On Windows, use the Linux amd64 or arm64
 release inside WSL 2. Enable WSL 2 from PowerShell with `wsl --install`, then
-follow the Linux verification and installation steps in a WSL Linux shell.
-See [installation verification](docs/VERIFICATION.md) for the commands.
+run that command in an administrator PowerShell session. Restart your computer
+if prompted, then follow the Linux verification and installation steps in a WSL
+Linux shell. See [installation verification](docs/VERIFICATION.md) for the
+commands.
 
 For firmware scans, extract the root filesystem inside the WSL Linux filesystem,
 for example under your Linux home directory. Do not extract it under `/mnt/c/`

@@ -13,11 +13,25 @@ of vulnerabilities or regulatory conformity.
 
 ## Requirements and installation
 
-Supported binary targets: Linux and macOS, amd64 and arm64. Windows is not
-currently supported. The CLI does not require Node, Python, Docker, a daemon,
-socket or repository credentials. Input metadata and artifacts must already be
+Supported binary targets: Linux and macOS, amd64 and arm64. There is no native
+Windows build yet; Windows users can run the Linux release inside WSL 2 as
+described below. The CLI does not require Node, Python, Docker, a daemon, socket
+or repository credentials. Input metadata and artifacts must already be
 available locally; scanning does not run installs or build scripts. Provisioning
 the CLI and Syft requires network access; generation can run offline.
+
+### Windows
+
+There is no native Windows build yet. On Windows, use the Linux amd64 or arm64
+release inside WSL 2. Enable WSL 2 from PowerShell with `wsl --install`, then
+follow the Linux verification and installation steps in a WSL Linux shell.
+See [installation verification](docs/VERIFICATION.md) for the commands.
+
+For firmware scans, extract the root filesystem inside the WSL Linux filesystem,
+for example under your Linux home directory. Do not extract it under `/mnt/c/`
+or another Windows drive: NTFS does not preserve all Linux symlinks and
+permissions, so the resulting inventory can be incomplete. Alternatively, run
+the generator on the Linux build machine or CI runner that builds the firmware.
 
 Download the CLI from the [project releases](https://github.com/alexv-mc2/cracken-sbom/releases)
 and verify the checksums and signatures as described in

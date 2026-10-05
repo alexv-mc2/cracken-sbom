@@ -2,15 +2,10 @@
 
 ## Reporting a vulnerability
 
-Please report suspected vulnerabilities privately. When GitHub private
-vulnerability reporting is available for this repository, use
+Please report suspected vulnerabilities privately using GitHub private
+vulnerability reporting:
 [Report a vulnerability](https://github.com/alexv-mc2/cracken-sbom/security/advisories/new).
-Do not include sensitive details in a public issue. The reporting link may be
-unavailable before the repository enables GitHub private vulnerability
-reporting.
-
-Private reporting availability is managed in the repository settings; this
-document does not indicate that it is currently enabled.
+Do not include sensitive details in a public issue.
 
 ## What happens next
 

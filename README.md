@@ -13,11 +13,32 @@ of vulnerabilities or regulatory conformity.
 
 ## Requirements and installation
 
-Supported binary targets: Linux and macOS, amd64 and arm64. Windows is not
-currently supported. The CLI does not require Node, Python, Docker, a daemon,
-socket or repository credentials. Input metadata and artifacts must already be
+Supported binary targets: Linux and macOS, amd64 and arm64. There is no native
+Windows build yet; Windows users can run the Linux release inside WSL 2 as
+described below. The CLI does not require Node, Python, Docker, a daemon, socket
+or repository credentials. Input metadata and artifacts must already be
 available locally; scanning does not run installs or build scripts. Provisioning
 the CLI and Syft requires network access; generation can run offline.
+
+### Windows
+
+There is no native Windows build yet. On Windows, use the Linux amd64 or arm64
+release inside WSL 2. For a new installation, run `wsl --install` in an
+administrator PowerShell session and restart your computer if prompted. If WSL
+is already installed, check the distro version with `wsl -l -v`; convert a
+distro to WSL 2 with `wsl --set-version <DistroName> 2`. If `wsl --install`
+shows help instead of installing a distro, list available distros with
+`wsl --list --online` and install one with `wsl --install -d <DistroName>`.
+See Microsoft's [WSL installation guide](https://learn.microsoft.com/en-us/windows/wsl/install)
+for details. Once a WSL 2 distro is available, follow the Linux verification
+and installation steps from its Linux shell. See
+[installation verification](docs/VERIFICATION.md) for the commands.
+
+For firmware scans, extract the root filesystem inside the WSL Linux filesystem,
+for example under your Linux home directory. Do not extract it under `/mnt/c/`
+or another Windows drive: NTFS does not preserve all Linux symlinks and
+permissions, so the resulting inventory can be incomplete. Alternatively, run
+the generator on the Linux build machine or CI runner that builds the firmware.
 
 Download the CLI from the [project releases](https://github.com/alexv-mc2/cracken-sbom/releases)
 and verify the checksums and signatures as described in

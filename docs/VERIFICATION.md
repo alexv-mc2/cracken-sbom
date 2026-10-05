@@ -6,6 +6,14 @@ build provenance before extracting or executing a release. Use a trusted cosign
 verify`. Commands below run in Bash on Linux and macOS. GitHub CLI may require
 `gh auth login` for API access; no account token is sent to the scanner.
 
+On Windows, use the Linux release inside WSL 2. Follow the setup instructions
+in the [README Windows section](../README.md#windows), then run these Linux
+commands from a WSL Linux shell. For firmware root filesystems, extract under
+the WSL Linux filesystem (for example, your Linux home directory), not under
+`/mnt/c/` or another Windows drive, where NTFS can lose symlinks and permissions
+and make the inventory incomplete. You can also run the generator on the Linux
+build machine or CI runner that builds the firmware.
+
 ## Release download
 
 Set the exact version you intend to install; do not substitute `latest` or a

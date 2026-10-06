@@ -43,9 +43,9 @@ your product is secure or compliant.
 
 ## Requirements and installation
 
-Supported binary targets: Linux and macOS, amd64 and arm64. There is no native
-Windows build yet; Windows users can run the Linux release inside WSL 2 as
-described below. The CLI does not require [Node.js](https://nodejs.org/),
+Supported binary targets: Linux and macOS, amd64 and arm64. Works on Windows
+through WSL 2 (Windows Subsystem for Linux): use the Linux release inside WSL 2
+as described below. The CLI does not require [Node.js](https://nodejs.org/),
 [Python](https://www.python.org/downloads/), [Docker](https://docs.docker.com/get-started/), a daemon, socket
 or repository credentials. Input metadata and artifacts must already be
 available locally; scanning does not run installs or build scripts. Provisioning
@@ -53,9 +53,10 @@ the CLI and Syft requires network access; generation can run offline.
 
 ### Windows
 
-There is no native Windows build yet. On Windows, use the Linux amd64 or arm64
-release inside WSL 2. For a new installation, run `wsl --install` in an
-administrator [PowerShell](https://learn.microsoft.com/en-us/powershell/scripting/overview)
+Works on Windows through WSL 2 (Windows Subsystem for Linux): use the Linux
+release inside WSL 2 as described below. For a new installation, run
+`wsl --install` in an administrator
+[PowerShell](https://learn.microsoft.com/en-us/powershell/scripting/overview)
 session. WSL 2 (Windows Subsystem for Linux) is a Windows component from
 Microsoft that runs Linux programs. It is switched on once.
 

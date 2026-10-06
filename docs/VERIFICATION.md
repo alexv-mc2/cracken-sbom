@@ -3,12 +3,15 @@
 Verify the signed checksum manifest, every downloaded file's checksum and GitHub
 build provenance before extracting or executing a release. Use a trusted
 [cosign](https://docs.sigstore.dev/cosign/system_config/installation/)
-2.6.2 (or compatible newer version) and a current
-[GitHub CLI](https://cli.github.com/) with `gh attestation
-verify`. Commands below run in Bash on Linux and macOS. GitHub CLI may require
-`gh auth login` for API access; no account token is sent to the scanner.
+2.6.2 (or compatible newer version).
 
-cosign is a tool from the Sigstore project (Linux Foundation) for checking digital signatures of software. It confirms that the file comes from the public crAcken build and has not been changed.
+cosign is a tool from the Sigstore project (Linux Foundation) for checking
+digital signatures of software. It confirms that the file comes from the public
+crAcken build and has not been changed.
+
+Use a current [GitHub CLI](https://cli.github.com/) with `gh attestation verify`.
+Commands below run in Bash on Linux and macOS. GitHub CLI may require
+`gh auth login` for API access; no account token is sent to the scanner.
 
 On Windows, use the Linux release inside WSL 2. Follow the setup instructions
 in the [README Windows section](../README.md#windows), then run these Linux

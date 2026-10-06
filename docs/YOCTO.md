@@ -100,7 +100,7 @@ The ZIP includes all SPDX documents from the image archive; it excludes
 `index.json` and any source/package content archives. Keep the extracted index
 and original archive locally for your records.
 
-Select **SPDX ZIP** on crAcken's upload page and upload `yocto-image.spdx.zip`.
+On crAcken's Tools page, choose SPDX JSON and upload `yocto-image.spdx.zip`.
 The app applies its normal upload limits and reports extraction results;
 review any missing-component or partial-coverage notice before relying on the
 analysis. Packaging the documents does not prove that the inventory is complete

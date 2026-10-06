@@ -1,9 +1,16 @@
 # Verify release downloads and the scanning engine
 
 Verify the signed checksum manifest, every downloaded file's checksum and GitHub
-build provenance before extracting or executing a release. Use a trusted cosign
-2.6.2 (or compatible newer version) and a current GitHub CLI with `gh attestation
-verify`. Commands below run in Bash on Linux and macOS. GitHub CLI may require
+build provenance before extracting or executing a release. Use a trusted
+[cosign](https://docs.sigstore.dev/cosign/system_config/installation/)
+2.6.2 (or compatible newer version).
+
+cosign is a tool from the Sigstore project (Linux Foundation) for checking
+digital signatures of software. It confirms that the file comes from the public
+crAcken build and has not been changed.
+
+Use a current [GitHub CLI](https://cli.github.com/) with `gh attestation verify`.
+Commands below run in Bash on Linux and macOS. GitHub CLI may require
 `gh auth login` for API access; no account token is sent to the scanner.
 
 On Windows, use the Linux release inside WSL 2. Follow the setup instructions
@@ -13,6 +20,25 @@ the WSL Linux filesystem (for example, your Linux home directory), not under
 `/mnt/c/` or another Windows drive, where NTFS can lose symlinks and permissions
 and make the inventory incomplete. You can also run the generator on the Linux
 build machine or CI runner that builds the firmware.
+
+## Before you start
+
+Install [GitHub CLI](https://cli.github.com/), trusted
+[cosign](https://docs.sigstore.dev/cosign/system_config/installation/),
+[Git](https://git-scm.com/downloads/), [curl](https://curl.se/download.html)
+and [Python 3.8 or later](https://www.python.org/downloads/).
+Use [Bash](https://www.gnu.org/software/bash/) for the commands below, including
+on macOS. You also need [tar](https://www.gnu.org/software/tar/manual/),
+[sha256sum](https://www.gnu.org/software/coreutils/manual/html_node/sha2-utilities.html)
+on Linux or [shasum](https://perldoc.perl.org/shasum) on macOS. Install these
+using your operating system's trusted package manager where appropriate.
+These tools are used to download, check and unpack the release; Python and
+curl are used by the Syft installation helpers. They are not prerequisites for
+running the already-installed generator itself.
+
+Run the following sections in order in the same Bash terminal. Keep the network
+connected during installation and verification. After both tools are verified,
+you can disconnect it and [generate the component list](#generate-the-component-list).
 
 ## Release download
 
@@ -30,6 +56,7 @@ VERSION=v0.1.0
 COSIGN=cosign
 mkdir "cracken-sbom-${VERSION}"
 cd "cracken-sbom-${VERSION}"
+RELEASE_DIR="$PWD"
 gh release download "$VERSION" --repo alexv-mc2/cracken-sbom
 
 "$COSIGN" verify-blob \
@@ -90,13 +117,31 @@ Syft because it is separately installed.
 Provision tools separately from the offline scan phase. Syft is not modified or
 vendored. The supported engine is **v1.54.0**, with platform archive and executable
 hashes recorded in `engine-manifest.json`. The helpers require Python 3.8+, curl
-and cosign >=2.5. Run from a trusted source checkout of this repository:
+and cosign >=2.5. Use Git to obtain the same public source commit you reviewed
+for the release. This downloads the generator's public code, not your firmware
+or your private source repository. Keep `EXPECTED_COMMIT` and `RELEASE_DIR`
+from the release verification above:
 
 ```bash
-./scripts/provision-cosign.sh /tmp/cracken-install/cosign
-COSIGN=/tmp/cracken-install/cosign \
-SYFT_CACHE=/tmp/cracken-install/syft-cache \
-./scripts/provision-syft.sh /tmp/cracken-install/syft
+: "${EXPECTED_COMMIT:?Complete release verification first}"
+: "${RELEASE_DIR:?Complete release verification first}"
+SOURCE_DIR="$RELEASE_DIR/source"
+git clone --no-checkout https://github.com/alexv-mc2/cracken-sbom.git "$SOURCE_DIR"
+git -C "$SOURCE_DIR" fetch origin "$EXPECTED_COMMIT"
+git -C "$SOURCE_DIR" checkout --detach "$EXPECTED_COMMIT"
+test "$(git -C "$SOURCE_DIR" rev-parse HEAD)" = "$EXPECTED_COMMIT"
+cd "$SOURCE_DIR"
+```
+
+Run the existing helpers from that verified checkout:
+
+```bash
+INSTALL_DIR="$RELEASE_DIR/tools"
+mkdir "$INSTALL_DIR"
+./scripts/provision-cosign.sh "$INSTALL_DIR/cosign"
+COSIGN="$INSTALL_DIR/cosign" \
+SYFT_CACHE="$INSTALL_DIR/syft-cache" \
+./scripts/provision-syft.sh "$INSTALL_DIR/syft"
 ```
 
 The first helper bootstraps cosign v2.6.2 over authenticated upstream HTTPS and
@@ -107,8 +152,8 @@ both the platform archive and exact extracted executable. It does not install
 globally. Keep verification material in the cache and recheck it with:
 
 ```bash
-./scripts/verify-syft.sh --cache /tmp/cracken-install/syft-cache \
-  --cosign /tmp/cracken-install/cosign
+./scripts/verify-syft.sh --cache "$INSTALL_DIR/syft-cache" \
+  --cosign "$INSTALL_DIR/cosign"
 ```
 
 For all four platforms, pre-provision archives and use `--all-platforms` with the
@@ -131,6 +176,29 @@ an executable, and the executable must not be replaced after verification.
 Syft is separately licensed Apache-2.0. Its authenticity, licence and update
 obligations are distinct from this tool's. Its authenticated release bytes do
 not prove that it detects every shipped component.
+
+## Generate the component list
+
+Keep the variables from the installation above. Extract your firmware locally,
+replace `ROOTFS` with its unpacked root directory and choose a non-secret release
+identifier. The output directory must not already exist. You can disconnect the
+network for this step:
+
+```bash
+ROOTFS="$HOME/firmware/rootfs"
+RELEASE_ID=firmware-2026.10.06
+OUTPUT_DIR="$HOME/evidence/$RELEASE_ID"
+mkdir -p "$HOME/evidence"
+"$RELEASE_DIR/cracken-sbom" generate \
+  --target-type rootfs --target "$ROOTFS" \
+  --target-id "$RELEASE_ID" \
+  --syft "$INSTALL_DIR/syft" \
+  --output "$OUTPUT_DIR"
+```
+
+Review `sbom.cdx.json`, `provenance.json` and `quality.json` in that output
+directory. Upload only `sbom.cdx.json`; keep the two other files locally.
+See [output review and coverage limits](../README.md#review-the-output).
 
 Sources: [Syft v1.54.0 release](https://github.com/anchore/syft/releases/tag/v1.54.0),
 [Anchore verification](https://oss.anchore.com/docs/installation/verification/),

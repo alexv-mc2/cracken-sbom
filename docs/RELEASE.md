@@ -1,8 +1,9 @@
 # Release process
 
 Release tags use `vMAJOR.MINOR.PATCH`, optionally followed by a prerelease suffix.
-The first supported version is `v0.1.0`. Maintainers review the source and green
-CI before creating a tag. `.github/workflows/release.yml` publishes only on `v*` tags;
+The release version used in this guide is `v1.0.0`. Maintainers review the
+source and green CI before creating a tag. `.github/workflows/release.yml`
+publishes only on `v*` tags;
 the publishing path validates the version before building and treats tags containing `-` as
 prereleases. Tags and released assets must not be replaced after distribution.
 

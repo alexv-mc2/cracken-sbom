@@ -51,7 +51,7 @@ an independent trust anchor. For a maintainer trial, use its reviewed tag SHA.
 
 ```bash
 set -euo pipefail
-VERSION=v0.1.0
+VERSION=v1.0.0
 : "${EXPECTED_COMMIT:?Set EXPECTED_COMMIT to the trusted full source commit SHA}"
 COSIGN=cosign
 mkdir "cracken-sbom-${VERSION}"

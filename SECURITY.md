@@ -17,6 +17,5 @@ when a fix is available. No response or resolution time is guaranteed.
 
 ## Supported versions
 
-Once the first stable release is published, the supported release line will be
-`0.1.x`. Preview releases published before that stable release are not covered
-by this support policy.
+Once `v1.0.0` is published, the supported release line will be `1.0.x`.
+Prereleases are not covered by this support policy.

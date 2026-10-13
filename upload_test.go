@@ -324,13 +324,19 @@ func TestUploadTimeout(t *testing.T) {
 // network namespace, where TCP loopback need not be configured.
 func uploadUnixServer(t *testing.T, handler http.Handler) (*httptest.Server, *http.Client) {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "c7b-http-")
+	// Honor the configured temporary root when it fits. macOS TMPDIR paths
+	// can exceed the Unix socket address limit, so use a short fallback then.
+	tempRoot := os.TempDir()
+	if len(filepath.Join(tempRoot, "c7b-http-1234567890", "http.sock")) >= 104 {
+		tempRoot = "/tmp"
+	}
+	dir, err := os.MkdirTemp(tempRoot, "c7b-http-")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	socket := filepath.Join(dir, "http.sock")
-	listener, err := net.Listen("unix", socket)
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "unix", socket)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -609,5 +615,80 @@ func TestUploadPOSTDeadlineEndsRetryAfterWithoutRetryingEarly(t *testing.T) {
 	}
 	if err.Error() != uploadTimeout {
 		t.Fatal("timeout must use approved copy")
+	}
+}
+
+type uploadDeadlineBody struct{ ctx context.Context }
+
+func (b uploadDeadlineBody) Read([]byte) (int, error) { <-b.ctx.Done(); return 0, b.ctx.Err() }
+func (b uploadDeadlineBody) Close() error             { return nil }
+func TestUploadSuccessfulResponseBodyDeadlineIsTimeout(t *testing.T) {
+	for _, phase := range []struct {
+		method, path string
+		status       int
+	}{{"POST", "/v1/sboms", 202}, {"GET", "/v1/analyses/" + testAnalysisID, 200}} {
+		calls := 0
+		d := uploadTestDeps(func(r *http.Request) (*http.Response, error) {
+			calls++
+			response := uploadResponse(phase.status, "")
+			response.Body = uploadDeadlineBody{ctx: r.Context()}
+			return response, nil
+		})
+		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		_, err := uploadRequest(ctx, d, testUploadKey, phase.method, "https://api.example.test"+phase.path, "", "", nil)
+		cancel()
+		assertUploadCode(t, err, 4)
+		if err.Error() != uploadTimeout {
+			t.Fatal("wrong timeout copy")
+		}
+		assertUploadSafe(t, "", err)
+		if calls != 1 {
+			t.Fatalf("phase=%s calls=%d want=1", phase.method, calls)
+		}
+	}
+}
+
+type uploadTruncatedBody struct{}
+
+func (uploadTruncatedBody) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+func (uploadTruncatedBody) Close() error             { return nil }
+func TestUploadTruncatedHTTPResponseRetriesWithSameIdempotency(t *testing.T) {
+	for _, terminal := range []bool{false, true} {
+		calls := 0
+		var key string
+		var delays []time.Duration
+		d := uploadTestDeps(func(r *http.Request) (*http.Response, error) {
+			calls++
+			if calls == 1 {
+				key = r.Header.Get("Idempotency-Key")
+			} else if key != r.Header.Get("Idempotency-Key") {
+				t.Fatal("retry changed key")
+			}
+			response := uploadResponse(202, `{"analysis_id":"`+testAnalysisID+`"}`)
+			if terminal || calls < 4 {
+				response.Body = uploadTruncatedBody{}
+			}
+			return response, nil
+		})
+		d.sleep = func(_ context.Context, delay time.Duration) error { delays = append(delays, delay); return nil }
+		var out bytes.Buffer
+		err := runUpload(context.Background(), uploadArgs("--json"), &out, d)
+		code := 0
+		if terminal {
+			code = 1
+		}
+		assertUploadCode(t, err, code)
+		assertUploadSafe(t, out.String(), err)
+		if calls != 4 || len(delays) != 3 {
+			t.Fatal("truncated response retry count")
+		}
+		for i, want := range []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second} {
+			if delays[i] != want {
+				t.Fatal("wrong backoff")
+			}
+		}
+		if terminal && err.Error() != uploadNetwork {
+			t.Fatal("transport failure must use network copy")
+		}
 	}
 }

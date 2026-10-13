@@ -237,7 +237,23 @@ func uploadRequest(ctx context.Context, d uploadDeps, key, method, address, medi
 			data, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20+1))
 			resp.Body.Close()
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				if readErr != nil || len(data) > 1<<20 {
+				if ctx.Err() != nil {
+					return nil, uploadError(4, uploadTimeout)
+				}
+				if readErr != nil {
+					var networkError net.Error
+					if !errors.Is(readErr, io.ErrUnexpectedEOF) && !errors.As(readErr, &networkError) {
+						return nil, uploadError(1, uploadInvalid)
+					}
+					if attempt >= 3 {
+						return nil, uploadError(1, uploadNetwork)
+					}
+					if d.sleep(ctx, delay) != nil {
+						return nil, uploadError(4, uploadTimeout)
+					}
+					continue
+				}
+				if len(data) > 1<<20 {
 					return nil, uploadError(1, uploadInvalid)
 				}
 				return data, nil

@@ -692,3 +692,114 @@ func TestUploadTruncatedHTTPResponseRetriesWithSameIdempotency(t *testing.T) {
 		}
 	}
 }
+
+// The wire boundary is independent of the implementation constant: all supported
+// formats count raw bytes, including whitespace and a UTF-8 BOM, before HTTP.
+func TestUploadTenMiBRawFileBoundaryBeforeHTTP(t *testing.T) {
+	const limit = 10 << 20
+	const tooLarge = "The SBOM exceeds the 10 MiB limit for a single JSON file, including SPDX 3."
+	for _, format := range []struct {
+		name, document, media string
+	}{
+		{"cyclonedx", `{"bomFormat":"CycloneDX"}`, "application/vnd.cyclonedx+json"},
+		{"spdx2", `{"spdxVersion":"SPDX-2.3"}`, "application/spdx+json"},
+		{"spdx3", `{"@context":["https://spdx.org/rdf/3.0.1/spdx-context.jsonld"]}`, "application/spdx+json"},
+	} {
+		for _, layout := range []string{"json-string", "whitespace", "bom-and-whitespace"} {
+			for _, oversize := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/oversize=%v", format.name, layout, oversize), func(t *testing.T) {
+					size := limit
+					if oversize {
+						size++
+					}
+					var body []byte
+					if layout == "json-string" {
+						prefix := strings.TrimSuffix(format.document, "}") + `,"padding":"`
+						suffix := `"}`
+						body = []byte(prefix + strings.Repeat("x", size-len(prefix)-len(suffix)) + suffix)
+					} else {
+						prefix := format.document
+						if layout == "bom-and-whitespace" {
+							prefix = "\xef\xbb\xbf" + prefix
+						}
+						body = []byte(prefix + strings.Repeat(" ", size-len(prefix)))
+					}
+					if len(body) != size || !json.Valid(bytes.TrimPrefix(body, []byte{239, 187, 191})) {
+						t.Fatal("boundary fixture must be valid JSON of the exact raw size")
+					}
+					path := filepath.Join(t.TempDir(), "boundary.json")
+					if err := os.WriteFile(path, body, 0600); err != nil {
+						t.Fatal(err)
+					}
+					server, client := uploadUnixServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						if r.Method != http.MethodPost || r.URL.Path != "/v1/sboms" || r.Header.Get("Content-Type") != format.media {
+							t.Error("wrong upload method, path or content type")
+						}
+						got, err := io.ReadAll(r.Body)
+						if err != nil || !bytes.Equal(got, body) {
+							t.Error("raw boundary body changed during transmission")
+						}
+						w.WriteHeader(http.StatusAccepted)
+						fmt.Fprintf(w, `{"analysis_id":"%s"}`, testAnalysisID)
+					}))
+					calls := 0
+					transport := client.Transport
+					client.Transport = uploadRoundTrip(func(r *http.Request) (*http.Response, error) {
+						calls++
+						return transport.RoundTrip(r)
+					})
+					d := uploadDependencies()
+					d.client = client
+					d.getenv = func(string) string { return testUploadKey }
+					args := []string{"--sbom", path, "--project-id", testProjectID, "--version", "1.0", "--api-url", server.URL}
+					if oversize {
+						// Waiting must not start either: preflight prevents every HTTP call.
+						args = append(args, "--wait")
+					}
+					var stdout, stderr bytes.Buffer
+					err := runUpload(context.Background(), args, &stdout, d)
+					wantCode, wantCalls := 0, 1
+					if oversize {
+						wantCode, wantCalls = 1, 0
+						if err == nil || err.Error() != tooLarge {
+							t.Fatal("oversize file must use the approved 10 MiB message")
+						}
+						writeCLIError(append([]string{"upload"}, args...), &stderr, err)
+						if !strings.Contains(stderr.String(), tooLarge) || stdout.Len() != 0 {
+							t.Fatal("oversize message must be visible without an acceptance message")
+						}
+					}
+					assertUploadCode(t, err, wantCode)
+					if calls != wantCalls {
+						t.Fatalf("HTTP attempts=%d want=%d", calls, wantCalls)
+					}
+					assertUploadSafe(t, stdout.String()+stderr.String(), err)
+				})
+			}
+		}
+	}
+}
+
+func TestUploadHTTP413UsesApprovedLimitMessageWithoutRetry(t *testing.T) {
+	server, client := uploadUnixServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+		fmt.Fprint(w, `{"error":{"message":"SECRET_RESPONSE"}}`)
+	}))
+	calls := 0
+	transport := client.Transport
+	client.Transport = uploadRoundTrip(func(r *http.Request) (*http.Response, error) {
+		calls++
+		return transport.RoundTrip(r)
+	})
+	d := uploadTestDeps(nil)
+	d.client = client
+	var stdout, stderr bytes.Buffer
+	args := uploadArgs("--api-url", server.URL)
+	err := runUpload(context.Background(), args, &stdout, d)
+	assertUploadCode(t, err, 1)
+	if err == nil || err.Error() != "The SBOM exceeds the 10 MiB limit for a single JSON file, including SPDX 3." || calls != 1 {
+		t.Fatal("HTTP 413 must use approved copy and must not retry")
+	}
+	writeCLIError(append([]string{"upload"}, args...), &stderr, err)
+	assertUploadSafe(t, stdout.String()+stderr.String(), err)
+}

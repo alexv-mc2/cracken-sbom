@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-const uploadLimit = 16 << 20
+const uploadLimit = 10 << 20
 
 var uploadTokenPattern = regexp.MustCompile(`^crk_[a-z2-7]{12}_[A-Za-z0-9_-]{43}$`)
 var uploadUUIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
@@ -134,7 +134,10 @@ func readUpload(o uploadOptions, d uploadDeps) ([]byte, string, error) {
 	}
 	defer f.Close()
 	b, e := io.ReadAll(io.LimitReader(f, uploadLimit+1))
-	if e != nil || len(b) > uploadLimit || bytes.HasPrefix(b, []byte("PK")) {
+	if len(b) > uploadLimit {
+		return nil, "", uploadError(1, uploadTooLarge)
+	}
+	if e != nil || bytes.HasPrefix(b, []byte("PK")) {
 		return nil, "", uploadError(1, uploadFile)
 	}
 	var doc map[string]json.RawMessage
@@ -257,6 +260,9 @@ func uploadRequest(ctx context.Context, d uploadDeps, key, method, address, medi
 					return nil, uploadError(1, uploadInvalid)
 				}
 				return data, nil
+			}
+			if resp.StatusCode == http.StatusRequestEntityTooLarge {
+				return nil, uploadError(1, uploadTooLarge)
 			}
 			if resp.StatusCode == 403 {
 				var payload struct {

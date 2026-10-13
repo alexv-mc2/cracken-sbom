@@ -535,3 +535,40 @@ func TestUploadMainErrorOutputUsesParsedJSONFlag(t *testing.T) {
 		}
 	}
 }
+
+func TestUploadTransportTimeoutsDoNotCapBodyTransmission(t *testing.T) {
+	deps := uploadDependencies()
+	if deps.client.Timeout != 0 {
+		t.Fatal("overall client timeout caps SBOM body transmission")
+	}
+	transport, ok := deps.client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatal("upload client must use bounded standard transport")
+	}
+	if transport.DialContext == nil || uploadDialer().Timeout != 15*time.Second {
+		t.Fatal("connection timeout must be 15 seconds")
+	}
+	if transport.TLSHandshakeTimeout != 15*time.Second {
+		t.Fatal("TLS timeout must be 15 seconds")
+	}
+	if transport.ResponseHeaderTimeout != 30*time.Second {
+		t.Fatal("header timeout must be 30 seconds")
+	}
+	if deps.client.CheckRedirect(nil, nil) != http.ErrUseLastResponse {
+		t.Fatal("redirect refusal lost")
+	}
+}
+func TestUploadRetryAfterDoesNotOverflowOrImposeArbitraryCap(t *testing.T) {
+	now := time.Now()
+	if retryDelay("120", now) != 120*time.Second {
+		t.Fatal("Retry-After must be honored above 60 seconds")
+	}
+	for _, raw := range []string{"9223372036854775807", "18446744073709551616"} {
+		if retryDelay(raw, now) != time.Duration(1<<63-1) {
+			t.Fatal("unrepresentable delay must saturate safely")
+		}
+	}
+	if retryDelay("-1", now) != time.Second {
+		t.Fatal("negative Retry-After must not become a negative duration")
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -54,8 +55,20 @@ type uploadDeps struct {
 	now      func() time.Time
 }
 
+func uploadDialer() *net.Dialer {
+	return &net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}
+}
+
+func uploadTransport() *http.Transport {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = uploadDialer().DialContext
+	transport.TLSHandshakeTimeout = 15 * time.Second
+	transport.ResponseHeaderTimeout = 30 * time.Second
+	return transport
+}
+
 func uploadDependencies() uploadDeps {
-	return uploadDeps{client: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, getenv: os.Getenv, readFile: func(p string) (io.ReadCloser, error) { return os.Open(p) }, sleep: func(ctx context.Context, d time.Duration) error {
+	return uploadDeps{client: &http.Client{Transport: uploadTransport(), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, getenv: os.Getenv, readFile: func(p string) (io.ReadCloser, error) { return os.Open(p) }, sleep: func(ctx context.Context, d time.Duration) error {
 		t := time.NewTimer(d)
 		defer t.Stop()
 		select {
@@ -177,14 +190,23 @@ func uploadAddress(base *url.URL, path string, q url.Values) string {
 	return u.String()
 }
 func retryDelay(h string, now time.Time) time.Duration {
-	if n, e := strconv.Atoi(h); e == nil && n >= 0 {
-		return time.Duration(n) * time.Second
+	const maximum = time.Duration(1<<63 - 1)
+	seconds, err := strconv.ParseUint(h, 10, 64)
+	if err == nil {
+		if seconds > uint64(maximum/time.Second) {
+			return maximum
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	if errors.Is(err, strconv.ErrRange) {
+		return maximum
 	}
 	if t, e := http.ParseTime(h); e == nil && t.After(now) {
 		return t.Sub(now)
 	}
 	return time.Second
 }
+
 func uploadRequest(ctx context.Context, d uploadDeps, key, method, address, media, idem string, b []byte) ([]byte, error) {
 	// Copy the client to enforce redirect refusal even with injected transports.
 	c := *d.client

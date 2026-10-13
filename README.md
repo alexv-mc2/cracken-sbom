@@ -229,7 +229,7 @@ Use `--project-slug PRODUCT_SLUG` instead of `--project-id` when you know the pr
 
 The command reads one JSON file, at most 16 MiB, and identifies CycloneDX, SPDX 2 or SPDX 3 from its content. ZIP files are refused. The API applies the format-specific size limit: 10 MiB for CycloneDX and SPDX 2, 16 MiB for SPDX 3. Only the SBOM is sent. The default idempotency key is derived from the file digest, canonical target and version, so rerunning the same build reuses its submission. `--idempotency-key KEY` can supply a build identifier; reuse it only for the same request. Redirects are never followed. Network failures and server errors retry up to three times, with waits of 2, 4 and 8 seconds; rate-limit replies retry up to three times using Retry-After.
 
-`--wait` checks the analysis every five seconds; `--timeout 15m` sets the waiting limit. To fail a build on findings, add `--fail-on critical`, `high`, `medium` or `low`. This implies waiting and reads every findings page. The key needs Read findings permission (`findings:read`), which is not included in the default scopes.
+`--timeout 15m` bounds the upload request, including retries. After acceptance, `--wait` checks the analysis every five seconds with a separate timeout of the same length. If Retry-After exceeds the remaining upload time, the command times out without retrying early. To fail a build on findings, add `--fail-on critical`, `high`, `medium` or `low`. This implies waiting and reads every findings page. The key needs Read findings permission (`findings:read`), which is not included in the default scopes.
 
 ```sh
 cracken-sbom upload --sbom ./output/sbom.cdx.json --project-slug widget --version 1.2.3 --fail-on high --timeout 15m --json
@@ -243,6 +243,6 @@ cracken-sbom upload --sbom ./output/sbom.cdx.json --project-slug widget --versio
 | 1 | Invalid options, configuration, file or API response, or an HTTP error |
 | 2 | Analysis failed |
 | 3 | Findings at or above the chosen threshold |
-| 4 | Waiting timed out |
+| 4 | Upload or analysis waiting timed out |
 
 Replace keys before expiry, revoke them if exposed, and store them only in protected environment variables. Use the customer API guide for API limits, authentication and reporting endpoints.

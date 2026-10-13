@@ -572,3 +572,42 @@ func TestUploadRetryAfterDoesNotOverflowOrImposeArbitraryCap(t *testing.T) {
 		t.Fatal("negative Retry-After must not become a negative duration")
 	}
 }
+
+func TestUploadPOSTDeadlineEndsRetryAfterWithoutRetryingEarly(t *testing.T) {
+	calls := 0
+	deadlineSeen := false
+	var delay time.Duration
+	d := uploadTestDeps(func(r *http.Request) (*http.Response, error) {
+		calls++
+		if _, ok := r.Context().Deadline(); !ok {
+			t.Fatal("POST context lacks timeout")
+		}
+		response := uploadResponse(429, `{"error":"SECRET_RESPONSE"}`)
+		response.Header.Set("Retry-After", "120")
+		return response, nil
+	})
+	d.sleep = func(ctx context.Context, duration time.Duration) error {
+		if _, ok := ctx.Deadline(); !ok {
+			t.Fatal("retry sleep lacks POST deadline")
+		}
+		delay = duration
+		// Await the deliberately expired context rather than shortening Retry-After.
+		<-ctx.Done()
+		deadlineSeen = errors.Is(ctx.Err(), context.DeadlineExceeded)
+		return ctx.Err()
+	}
+	var stdout, stderr bytes.Buffer
+	err := runUpload(context.Background(), uploadArgs("--timeout", "1ns", "--json"), &stdout, d)
+	assertUploadCode(t, err, 4)
+	writeCLIError(append([]string{"upload"}, uploadArgs("--timeout", "1ns", "--json")...), &stderr, err)
+	assertUploadSafe(t, stdout.String()+stderr.String(), nil)
+	if calls != 1 || !deadlineSeen || delay != 120*time.Second {
+		t.Fatalf("calls=%d deadline=%v delay=%s", calls, deadlineSeen, delay)
+	}
+	if stderr.Len() != 0 {
+		t.Fatal("JSON timeout leaked additional stderr")
+	}
+	if err.Error() != uploadTimeout {
+		t.Fatal("timeout must use approved copy")
+	}
+}

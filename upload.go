@@ -312,7 +312,9 @@ func runUpload(ctx context.Context, args []string, out io.Writer, d uploadDeps) 
 	if err != nil {
 		return err
 	}
-	data, err := uploadRequest(ctx, d, key, "POST", uploadAddress(base, "/v1/sboms", uploadTarget(o)), media, uploadIdempotency(o, b), b)
+	uploadCtx, cancelUpload := context.WithTimeout(ctx, o.timeout)
+	data, err := uploadRequest(uploadCtx, d, key, "POST", uploadAddress(base, "/v1/sboms", uploadTarget(o)), media, uploadIdempotency(o, b), b)
+	cancelUpload()
 	if err != nil {
 		return err
 	}

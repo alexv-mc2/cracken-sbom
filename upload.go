@@ -145,13 +145,12 @@ func readUpload(o uploadOptions, d uploadDeps) ([]byte, string, error) {
 	if json.Unmarshal(clean, &doc) != nil || doc == nil {
 		return nil, "", uploadError(1, uploadFormat)
 	}
-	var v string
-	json.Unmarshal(doc["bomFormat"], &v)
-	if v == "CycloneDX" {
+	var bomFormat string
+	if json.Unmarshal(doc["bomFormat"], &bomFormat) == nil && bomFormat == "CycloneDX" {
 		return b, "application/vnd.cyclonedx+json", nil
 	}
-	json.Unmarshal(doc["spdxVersion"], &v)
-	if regexp.MustCompile(`^SPDX-2\.[0-9]+$`).MatchString(v) {
+	var spdxVersion string
+	if json.Unmarshal(doc["spdxVersion"], &spdxVersion) == nil && regexp.MustCompile(`^SPDX-2\.[0-9]+$`).MatchString(spdxVersion) {
 		return b, "application/spdx+json", nil
 	}
 	if bytes.Contains(doc["@context"], []byte("spdx.org/rdf/3")) {

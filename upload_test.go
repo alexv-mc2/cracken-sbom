@@ -803,3 +803,56 @@ func TestUploadHTTP413UsesApprovedLimitMessageWithoutRetry(t *testing.T) {
 	writeCLIError(append([]string{"upload"}, args...), &stderr, err)
 	assertUploadSafe(t, stdout.String()+stderr.String(), err)
 }
+
+func TestUploadSPDXVersionMustComeFromExplicitStringField(t *testing.T) {
+	for _, tc := range []struct {
+		name, document string
+		valid          bool
+	}{
+		{"missing", `{"bomFormat":"SPDX-2.3"}`, false},
+		{"null", `{"bomFormat":"SPDX-2.3","spdxVersion":null}`, false},
+		{"number", `{"bomFormat":"SPDX-2.3","spdxVersion":23}`, false},
+		{"boolean", `{"bomFormat":"SPDX-2.3","spdxVersion":true}`, false},
+		{"array", `{"bomFormat":"SPDX-2.3","spdxVersion":["SPDX-2.3"]}`, false},
+		{"object", `{"bomFormat":"SPDX-2.3","spdxVersion":{"version":"SPDX-2.3"}}`, false},
+		{"explicit-spdx2", `{"bomFormat":"SPDX-2.3","spdxVersion":"SPDX-2.3"}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "format.json")
+			if err := os.WriteFile(path, []byte(tc.document), 0600); err != nil {
+				t.Fatal(err)
+			}
+			server, client := uploadUnixServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				if err != nil || string(body) != tc.document || r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/spdx+json" {
+					t.Error("explicit SPDX 2 must upload the unchanged document with its media type")
+				}
+				w.WriteHeader(http.StatusAccepted)
+				fmt.Fprintf(w, `{"analysis_id":"%s"}`, testAnalysisID)
+			}))
+			calls := 0
+			transport := client.Transport
+			client.Transport = uploadRoundTrip(func(r *http.Request) (*http.Response, error) {
+				calls++
+				return transport.RoundTrip(r)
+			})
+			d := uploadDependencies()
+			d.client = client
+			d.getenv = func(string) string { return testUploadKey }
+			args := []string{"--sbom", path, "--project-id", testProjectID, "--version", "1.0", "--api-url", server.URL}
+			var stdout bytes.Buffer
+			err := runUpload(context.Background(), args, &stdout, d)
+			wantCode, wantCalls := 1, 0
+			if tc.valid {
+				wantCode, wantCalls = 0, 1
+			} else if err == nil || err.Error() != uploadFormat || stdout.Len() != 0 {
+				t.Fatal("invalid spdxVersion must fail format validation before HTTP")
+			}
+			assertUploadCode(t, err, wantCode)
+			if calls != wantCalls {
+				t.Fatalf("HTTP attempts=%d want=%d", calls, wantCalls)
+			}
+			assertUploadSafe(t, stdout.String(), err)
+		})
+	}
+}

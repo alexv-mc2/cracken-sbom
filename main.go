@@ -17,6 +17,7 @@ import (
 
 // Release builds bind this value to their exact tag with -ldflags -X.
 var toolVersion = "0.1.0"
+
 const maxUploadBytes = 10 << 20
 
 type generateOptions struct {
@@ -28,8 +29,8 @@ func main() {
 	ctx, stop := signalContext(context.Background())
 	defer stop()
 	if err := runCLI(ctx, os.Args[1:], os.Stdout, runEngine, time.Now); err != nil {
-		fmt.Fprintln(os.Stderr, "cracken-sbom:", err)
-		os.Exit(1)
+		writeCLIError(os.Args[1:], os.Stderr, err)
+		os.Exit(cliExitCode(err))
 	}
 }
 
@@ -121,6 +122,9 @@ func validatePaths(o *generateOptions) error {
 }
 
 func runCLI(ctx context.Context, args []string, stdout io.Writer, runner engineRunner, now func() time.Time) error {
+	if len(args) > 0 && args[0] == "upload" {
+		return runUpload(ctx, args[1:], stdout, uploadDependencies())
+	}
 	if err := contextError(ctx); err != nil {
 		return err
 	}
@@ -230,4 +234,16 @@ func publishOutputs(ctx context.Context, output string, sbom, provenance, qualit
 		return errors.New("cannot publish output directory")
 	}
 	return nil
+}
+
+// The JSON upload result already contains its exit code; retain a single object
+// across both output streams rather than adding a human error line.
+func writeCLIError(args []string, stderr io.Writer, err error) {
+	if len(args) > 0 && args[0] == "upload" {
+		options, _ := parseUpload(args[1:])
+		if options.json {
+			return
+		}
+	}
+	fmt.Fprintln(stderr, "cracken-sbom:", err)
 }

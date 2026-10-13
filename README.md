@@ -22,7 +22,7 @@ or run your build scripts.
 
 After downloading and verifying the generator and Syft, you can disconnect the
 network and generate the list offline. Installation and signature verification
-may need internet access; generation does not upload data or send telemetry.
+may need internet access. Generation does not upload data or send telemetry; only the explicit upload command sends the named SBOM.
 It does not need access to your online source repository.
 
 The result is a readable JSON text file. It does not contain copied source code
@@ -32,7 +32,7 @@ licenses, package identifiers and hashes can remain. Your non-secret release
 identifier is also included. Open `sbom.cdx.json` in a text editor and check it
 before uploading: component names can reveal internal product or customer
 names. Upload only that file; keep `provenance.json` and `quality.json` for your
-records. Nothing is sent until you choose to upload the list yourself.
+records. Nothing is sent until you run upload for the SBOM file you choose.
 
 The generator's [source code](https://github.com/alexv-mc2/cracken-sbom) is open
 under Apache-2.0. Signed downloads can be checked against the public build and
@@ -124,7 +124,7 @@ This tool does not provide a Yocto adapter or conversion.
 
 ## What leaves your machine
 
-The CLI does not upload data or send telemetry. Generation writes the SBOM and
+Generation does not upload data or send telemetry. The explicit upload command sends only the named SBOM. Generation writes the SBOM and
 sidecars to the output directory you selected. If you choose to submit an
 inventory to a service, upload only `sbom.cdx.json`; keep `provenance.json` and
 `quality.json` in your local evidence store. Submission is a manual action. The
@@ -211,3 +211,38 @@ active workflow in this repository. It does not upload generated evidence.
 
 The wrapper is licensed under Apache-2.0. See [LICENSE](LICENSE) and
 [NOTICE](NOTICE) for attribution and third-party notices.
+
+
+## Send the SBOM to crAcken (optional)
+
+Generation stays offline. Only the upload command sends data to crAcken, and only the SBOM file you name, when you run it. It does not send source files, provenance or quality files.
+
+Create an API key on the API keys page in crAcken. Set `CRACKEN_API_KEY` through your CI secret store or a protected shell environment. Set `CRACKEN_API_URL` to the API base URL supplied for your company, ending at the API function base before `/v1/sboms`. HTTPS is required; HTTP is accepted only for localhost, 127.0.0.1 and ::1. Never put the key in a command, a URL or a log. The CLI accepts no key flag.
+
+Send to a new version of a product:
+
+```sh
+cracken-sbom upload --sbom ./output/sbom.cdx.json --project-id PRODUCT_UUID --version 1.2.3 --wait
+```
+
+Use `--project-slug PRODUCT_SLUG` instead of `--project-id` when you know the product slug. Use `--release-id RELEASE_UUID` instead of the product and version flags for an existing release without an SBOM. `--release-label TEXT` can label a new release. Only one target selector is accepted.
+
+The command reads one JSON file, at most 16 MiB, and identifies CycloneDX, SPDX 2 or SPDX 3 from its content. ZIP files are refused. The API applies the format-specific size limit: 10 MiB for CycloneDX and SPDX 2, 16 MiB for SPDX 3. Only the SBOM is sent. The default idempotency key is derived from the file digest, canonical target and version, so rerunning the same build reuses its submission. `--idempotency-key KEY` can supply a build identifier; reuse it only for the same request. Redirects are never followed. Network failures and server errors retry up to three times, with waits of 2, 4 and 8 seconds; rate-limit replies retry up to three times using Retry-After.
+
+`--wait` checks the analysis every five seconds; `--timeout 15m` sets the waiting limit. To fail a build on findings, add `--fail-on critical`, `high`, `medium` or `low`. This implies waiting and reads every findings page. The key needs Read findings permission (`findings:read`), which is not included in the default scopes.
+
+```sh
+cracken-sbom upload --sbom ./output/sbom.cdx.json --project-slug widget --version 1.2.3 --fail-on high --timeout 15m --json
+```
+
+`--api-url URL` overrides `CRACKEN_API_URL`; it accepts a base URL without credentials, a query string or a fragment. `--json` emits one JSON result with the analysis identifier, status and exit code. It never prints a key, response body or full URL with its query string.
+
+| Exit code | Meaning |
+| --- | --- |
+| 0 | Upload accepted, or completed successfully with no findings at the chosen threshold |
+| 1 | Invalid options, configuration, file or API response, or an HTTP error |
+| 2 | Analysis failed |
+| 3 | Findings at or above the chosen threshold |
+| 4 | Waiting timed out |
+
+Replace keys before expiry, revoke them if exposed, and store them only in protected environment variables. Use the customer API guide for API limits, authentication and reporting endpoints.

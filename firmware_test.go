@@ -5,10 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
+	"unicode/utf8"
 )
 
 // The fake extractor stands in for unblob: it answers --version and writes a
@@ -104,7 +109,7 @@ func TestFirmwareImageEndToEndWithFakeExtractor(t *testing.T) {
 			} `json:"image"`
 			Extractor struct {
 				Kind, Version string
-				SHA256        string `json:"executable_sha256"`
+				SHA256        string `json:"entry_file_sha256"`
 			} `json:"extractor"`
 			ExtractedAt  string   `json:"extracted_at"`
 			SelectedRoot string   `json:"selected_root"`
@@ -297,7 +302,7 @@ func TestSelectRootFSPicksLargestAndReportsOthers(t *testing.T) {
 	mkfile(t, dir, "b_extract/etc/x", "b_extract/bin/x", "b_extract/lib/x", "b_extract/usr/bin/x") // 4
 	mkfile(t, dir, "c_extract/etc/x", "c_extract/lib/x")                                           // 2
 	mkfile(t, dir, "other/readme")
-	root, others, err := selectRootFS(context.Background(), dir)
+	root, others, _, err := selectRootFS(context.Background(), dir)
 	if err != nil || root != "b_extract" || strings.Join(others, ",") != "a_extract,c_extract" {
 		t.Fatalf("root=%q others=%v err=%v", root, others, err)
 	}
@@ -306,7 +311,7 @@ func TestSelectRootFSPicksLargestAndReportsOthers(t *testing.T) {
 func TestSelectRootFSDoesNotTreatNestedTreesAsSeparateRoots(t *testing.T) {
 	dir := t.TempDir()
 	mkfile(t, dir, "fs/etc/x", "fs/bin/x", "fs/usr/bin/x", "fs/usr/lib/x", "fs/opt/app/etc/y", "fs/opt/app/bin/y")
-	root, others, err := selectRootFS(context.Background(), dir)
+	root, others, _, err := selectRootFS(context.Background(), dir)
 	if err != nil || root != "fs" || len(others) != 0 {
 		t.Fatalf("root=%q others=%v err=%v", root, others, err)
 	}
@@ -315,7 +320,7 @@ func TestSelectRootFSDoesNotTreatNestedTreesAsSeparateRoots(t *testing.T) {
 func TestSelectRootFSAcceptsPackageDatabaseAndMergedUsr(t *testing.T) {
 	dir := t.TempDir()
 	mkfile(t, dir, "db_extract/var/lib/dpkg/status")
-	if root, _, err := selectRootFS(context.Background(), dir); err != nil || root != "db_extract" {
+	if root, _, _, err := selectRootFS(context.Background(), dir); err != nil || root != "db_extract" {
 		t.Fatalf("package database root: %q %v", root, err)
 	}
 	merged := t.TempDir()
@@ -323,7 +328,7 @@ func TestSelectRootFSAcceptsPackageDatabaseAndMergedUsr(t *testing.T) {
 	if os.Symlink("usr/bin", filepath.Join(merged, "m", "bin")) != nil {
 		t.Fatal("symlink")
 	}
-	if root, _, err := selectRootFS(context.Background(), merged); err != nil || root != "m" {
+	if root, _, _, err := selectRootFS(context.Background(), merged); err != nil || root != "m" {
 		t.Fatalf("merged usr root: %q %v", root, err)
 	}
 }
@@ -332,7 +337,7 @@ func TestSelectRootFSTieBreakIsDeterministic(t *testing.T) {
 	dir := t.TempDir()
 	mkfile(t, dir, "z/etc/x", "z/bin/x", "a/etc/x", "a/bin/x")
 	for i := 0; i < 3; i++ {
-		if root, _, err := selectRootFS(context.Background(), dir); err != nil || root != "a" {
+		if root, _, _, err := selectRootFS(context.Background(), dir); err != nil || root != "a" {
 			t.Fatalf("root=%q err=%v", root, err)
 		}
 	}
@@ -341,7 +346,7 @@ func TestSelectRootFSTieBreakIsDeterministic(t *testing.T) {
 func TestSelectRootFSRejectsTreesWithoutRootLayout(t *testing.T) {
 	dir := t.TempDir()
 	mkfile(t, dir, "blob/etc/only", "blob/data/x", "bin/alone")
-	if _, _, err := selectRootFS(context.Background(), dir); !errors.Is(err, errNoRootFS) {
+	if _, _, _, err := selectRootFS(context.Background(), dir); !errors.Is(err, errNoRootFS) {
 		t.Fatalf("expected errNoRootFS, got %v", err)
 	}
 }
@@ -353,16 +358,20 @@ func TestSelectRootFSDoesNotFollowSymlinkedDirectories(t *testing.T) {
 	if os.Symlink(outside, filepath.Join(dir, "escape")) != nil {
 		t.Fatal("symlink")
 	}
-	if root, _, err := selectRootFS(context.Background(), dir); err == nil {
+	if root, _, _, err := selectRootFS(context.Background(), dir); err == nil {
 		t.Fatalf("symlink to an outside tree was selected: %q", root)
 	}
 }
 
-func TestEntriesBesideListsSiblingsAlongThePath(t *testing.T) {
+func TestEntriesBesideSkipsImageLinkAndListsSiblings(t *testing.T) {
 	dir := t.TempDir()
-	mkfile(t, dir, "image.bin", "image.bin.extracted/1000/etc/x", "image.bin.extracted/2000/y", "image.bin.extracted/1000/etc/z")
-	listed, total := entriesBeside(dir, "image.bin.extracted/1000")
-	if total != 2 || strings.Join(listed, ",") != "image.bin,image.bin.extracted/2000" {
+	image := filepath.Join(t.TempDir(), "image.bin")
+	mkfile(t, dir, "image.bin.extracted/1000/etc/x", "image.bin.extracted/2000/y", "image.bin.extracted/1000/etc/z")
+	if os.Symlink(image, filepath.Join(dir, "image.bin")) != nil {
+		t.Fatal("symlink")
+	}
+	listed, total := entriesBeside(dir, "image.bin.extracted/1000", image, 1)
+	if total != 1 || strings.Join(listed, ",") != "image.bin.extracted/2000" {
 		t.Fatalf("listed=%v total=%d", listed, total)
 	}
 }
@@ -381,7 +390,7 @@ func TestFirmwarePropertyValueWithholdsUnsafeNames(t *testing.T) {
 }
 
 func TestFirmwareProvenanceRejectsInvalidFacts(t *testing.T) {
-	good := FirmwareInfo{ImageName: "a.bin", ImageSHA256: strings.Repeat("a", 64), ExtractorKind: "unblob", ExtractorVersion: "1.0.0", ExtractorSHA256: strings.Repeat("b", 64), ExtractedAt: "2026-10-04T12:00:00Z", RootPath: "r"}
+	good := FirmwareInfo{ImageName: "a.bin", ImageSHA256: strings.Repeat("a", 64), ExtractorKind: "unblob", ExtractorVersion: "1.0.0", ExtractorEntrySHA256: strings.Repeat("b", 64), ExtractedAt: "2026-10-04T12:00:00Z", RootPath: "r"}
 	ctx := testContext()
 	ctx.TargetType = "firmware-image"
 	ctx.Firmware = &good
@@ -408,5 +417,201 @@ func TestFirmwareProvenanceRejectsInvalidFacts(t *testing.T) {
 func TestFirmwareImageUsesRootfsScanPolicyDigest(t *testing.T) {
 	if configurationDigest("firmware-image") != configurationDigest("rootfs") {
 		t.Fatal("firmware-image must share the rootfs scan policy digest")
+	}
+}
+
+// binwalk 3 layout: a link to the image beside <image>.extracted/<offset>/, a JSON
+// log, and exit status 0 even when something failed.
+const fakeBinwalkScript = `#!/bin/sh
+if [ "$1" = --version ]; then echo "binwalk 3.1.0"; exit 0; fi
+for a in "$@"; do image=$a; done
+while [ $# -gt 0 ]; do
+  case "$1" in --directory) dir=$2; shift ;; --log) log=$2; shift ;; esac
+  shift
+done
+name=$(basename "$image")
+mkdir -p "$dir/$name.extracted/1000/etc" "$dir/$name.extracted/1000/bin" "$dir/$name.extracted/2000"
+ln -s "$image" "$dir/$name"
+echo ID=debian > "$dir/$name.extracted/1000/etc/os-release"
+echo sh > "$dir/$name.extracted/1000/bin/sh"
+echo blob > "$dir/$name.extracted/2000/data"
+printf '[{"Analysis":{"extractions":{"a":{"success":%s}}}}]' %s > "$log"
+`
+
+func TestFirmwareImageBinwalkLayout(t *testing.T) {
+	f := newFirmwareFixture(t, fmt.Sprintf(fakeBinwalkScript, "true", `""`), "binwalk")
+	if err := runCLI(context.Background(), f.args, &bytes.Buffer{}, successRunner, fixedNow); err != nil {
+		t.Fatal(err)
+	}
+	var p struct {
+		Firmware struct {
+			Extractor struct{ Kind, Version string }
+			Root      string   `json:"selected_root"`
+			Files     int      `json:"extracted_file_count"`
+			Unused    []string `json:"unused_entries"`
+			Errors    bool     `json:"extractor_reported_errors"`
+		}
+	}
+	data, _ := os.ReadFile(filepath.Join(f.output, "provenance.json"))
+	if err := json.Unmarshal(data, &p); err != nil {
+		t.Fatal(err)
+	}
+	fw := p.Firmware
+	if fw.Extractor.Kind != "binwalk" || fw.Extractor.Version != "3.1.0" || fw.Root != "device-1.2.3.bin.extracted/1000" {
+		t.Fatalf("unexpected firmware facts: %+v", fw)
+	}
+	// os-release and sh in the root, data beside it; the image link is not data.
+	if fw.Files != 3 || strings.Join(fw.Unused, ",") != "device-1.2.3.bin.extracted/2000" || fw.Errors {
+		t.Fatalf("link to the image was counted or listed: %+v", fw)
+	}
+}
+
+func TestFirmwareImageBinwalkLogFailureIsReportedDespiteExitZero(t *testing.T) {
+	f := newFirmwareFixture(t, fmt.Sprintf(fakeBinwalkScript, "false", `""`), "binwalk")
+	if err := runCLI(context.Background(), f.args, &bytes.Buffer{}, successRunner, fixedNow); err != nil {
+		t.Fatal(err)
+	}
+	quality, _ := os.ReadFile(filepath.Join(f.output, "quality.json"))
+	if !bytes.Contains(quality, []byte("extractor reported errors")) {
+		t.Fatal("binwalk failure in the JSON log was not reported")
+	}
+}
+
+func TestBinwalkLogShowsFailure(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		_ = os.WriteFile(p, []byte(body), 0600)
+		return p
+	}
+	if binwalkLogShowsFailure(write("ok", `[{"Analysis":{"extractions":{"a":{"success":true}}}}]`)) {
+		t.Error("successful log reported as failure")
+	}
+	if !binwalkLogShowsFailure(write("bad", `[{"Analysis":{"extractions":{"a":{"success":true},"b":{"success":false}}}}]`)) {
+		t.Error("failed extraction not detected")
+	}
+	if !binwalkLogShowsFailure(write("junk", `not json`)) || !binwalkLogShowsFailure(filepath.Join(dir, "missing")) {
+		t.Error("unreadable log must count as unconfirmed")
+	}
+}
+
+func TestFirmwareImageNoRootWithBinwalkLayoutListsInnerEntries(t *testing.T) {
+	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 3.1.0; exit 0; fi\nfor a in \"$@\"; do image=$a; done\nwhile [ $# -gt 0 ]; do case \"$1\" in --directory) d=$2; shift;; esac; shift; done\nn=$(basename \"$image\")\nmkdir -p \"$d/$n.extracted/0\"\nln -s \"$image\" \"$d/$n\"\n"
+	f := newFirmwareFixture(t, script, "binwalk")
+	err := runCLI(context.Background(), f.args, &bytes.Buffer{}, successRunner, fixedNow)
+	if err == nil || !strings.Contains(err.Error(), "0/") || strings.Contains(err.Error(), "device-1.2.3.bin,") || !strings.Contains(err.Error(), "binwalk --list") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestFirmwareImageHelperOutlivingExtractorIsStopped(t *testing.T) {
+	script := strings.Replace(fakeExtractorScript, "%s", "sleep 60 &\necho $! > \"$(dirname \"$0\")/helper.pid\"", 1)
+	f := newFirmwareFixture(t, script, "unblob")
+	start := time.Now()
+	if err := runCLI(context.Background(), f.args, &bytes.Buffer{}, successRunner, fixedNow); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(start) > 20*time.Second {
+		t.Fatal("generation waited for a leftover helper")
+	}
+	raw, err := os.ReadFile(filepath.Join(f.dir, "helper.pid"))
+	if err != nil {
+		t.Fatal("fake extractor did not record its helper")
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
+	deadline := time.Now().Add(3 * time.Second)
+	for syscall.Kill(pid, 0) == nil && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if syscall.Kill(pid, 0) == nil {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		t.Fatal("helper process survived the extraction")
+	}
+}
+
+func TestFirmwareImageUnsafeNamesAreWithheldFromSBOMOnly(t *testing.T) {
+	f := newFirmwareFixture(t, strings.Replace(fakeExtractorScript, "%s", "", 1), "unblob")
+	unsafe := filepath.Join(f.dir, "token=1.bin")
+	if os.Rename(f.image, unsafe) != nil {
+		t.Fatal("rename image")
+	}
+	args := append([]string{}, f.args...)
+	args[4] = unsafe
+	if err := runCLI(context.Background(), args, &bytes.Buffer{}, successRunner, fixedNow); err != nil {
+		t.Fatal(err)
+	}
+	sbom, _ := os.ReadFile(filepath.Join(f.output, "sbom.cdx.json"))
+	provenance, _ := os.ReadFile(filepath.Join(f.output, "provenance.json"))
+	if strings.Contains(string(sbom), "token=1") || !strings.Contains(string(sbom), "withheld-unsafe-characters") {
+		t.Fatal("unsafe image name reached the SBOM")
+	}
+	if !strings.Contains(string(provenance), "token=1.bin") {
+		t.Fatal("exact image name missing from local provenance")
+	}
+}
+
+func TestFirmwareImageWorkDir(t *testing.T) {
+	script := strings.Replace(fakeExtractorScript, "%s", "echo \"$dir\" > \"$(dirname \"$0\")/extract-dir\"", 1)
+	f := newFirmwareFixture(t, script, "unblob")
+	work := t.TempDir()
+	args := append(append([]string{}, f.args...), "--work-dir", work)
+	if err := runCLI(context.Background(), args, &bytes.Buffer{}, successRunner, fixedNow); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(f.dir, "extract-dir"))
+	resolved, _ := filepath.EvalSymlinks(work)
+	if !strings.HasPrefix(strings.TrimSpace(string(raw)), resolved+string(filepath.Separator)) {
+		t.Fatalf("extraction did not use --work-dir: %q", raw)
+	}
+	if entries, _ := os.ReadDir(work); len(entries) != 0 {
+		t.Fatal("work directory not cleaned")
+	}
+	for name, bad := range map[string][]string{
+		"relative": append(append([]string{}, f.args...), "--work-dir", "relative"),
+		"missing":  append(append([]string{}, f.args...), "--work-dir", filepath.Join(work, "nope")),
+		"on-rootfs": func() []string {
+			a, _ := cliFixture(t)
+			return append(a, "--work-dir", work)
+		}(),
+	} {
+		if err := runCLI(context.Background(), bad, &bytes.Buffer{}, successRunner, fixedNow); err == nil {
+			t.Errorf("%s --work-dir accepted", name)
+		}
+	}
+}
+
+func TestSelectRootFSPrefersPackageDatabaseAndCountsAllCandidates(t *testing.T) {
+	dir := t.TempDir()
+	mkfile(t, dir, "big/etc/a", "big/bin/a", "big/lib/a", "big/usr/a", "big/var/a")
+	mkfile(t, dir, "small/etc/a", "small/bin/a", "small/var/lib/opkg/status")
+	for i := 0; i < 24; i++ {
+		mkfile(t, dir, fmt.Sprintf("extra%02d/etc/a", i), fmt.Sprintf("extra%02d/bin/a", i))
+	}
+	root, others, total, err := selectRootFS(context.Background(), dir)
+	if err != nil || root != "small" || total != 25 || len(others) != maxListedCandidates {
+		t.Fatalf("root=%q listed=%d total=%d err=%v", root, len(others), total, err)
+	}
+}
+
+func TestTopLevelListingIsSafeForTerminals(t *testing.T) {
+	dir := t.TempDir()
+	mkfile(t, dir, "a\u202eevil", "\x1b[31mred")
+	for i := 0; i < 80; i++ {
+		mkfile(t, dir, strings.Repeat("\u00e9", 100)+fmt.Sprint(i))
+	}
+	text := topLevelListing(dir, "/none", 1)
+	if !utf8.ValidString(text) || strings.ContainsAny(text, "\u202e\x1b\u2026") || !strings.Contains(text, "...") {
+		t.Fatalf("unsafe listing: %q", text)
+	}
+}
+
+func TestFinalProvenanceRequiresFirmwareBlock(t *testing.T) {
+	ctx := testContext()
+	ctx.TargetType = "firmware-image"
+	if _, err := validateContext(ctx); err != nil {
+		t.Fatalf("pre-check must accept a context before extraction: %v", err)
+	}
+	if _, err := createProvenance([]byte("{}\n"), ctx, Quality{}); err == nil {
+		t.Fatal("final provenance without firmware facts accepted")
 	}
 }

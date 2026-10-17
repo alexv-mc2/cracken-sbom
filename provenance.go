@@ -80,6 +80,11 @@ func createProvenance(sbom []byte, ctx ProvenanceContext, quality Quality) ([]by
 	if err != nil {
 		return nil, err
 	}
+	// The pre-check validates the context before extraction; a final record of a
+	// firmware image without its extraction facts is never valid.
+	if ctx.TargetType == firmwareTargetType && ctx.Firmware == nil {
+		return nil, errors.New("firmware provenance is missing")
+	}
 	if !json.Valid(sbom) || len(sbom) == 0 {
 		return nil, errors.New("invalid final SBOM")
 	}

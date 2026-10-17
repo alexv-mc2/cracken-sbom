@@ -168,9 +168,17 @@ creates is fine), and the output directory must be new:
 The extractor kind is read from the file name (`unblob` or `binwalk`). For any
 other name add `--extractor-kind unblob` or `--extractor-kind binwalk`.
 Extraction can take a long time and needs free disk space of several times the
-image size. It happens in a private folder created next to the output
-directory, which is deleted when the command ends, also after an error or
-Ctrl-C.
+image size; nothing limits its size except the 2-hour time limit.
+
+The unpacked image is written to a private folder `.cracken-sbom-extract-*`
+that is created next to the output directory and deleted when the command ends,
+also after an error or Ctrl-C. If the process is killed without a chance to
+clean up (for example `kill -9` or a power cut), that folder stays and you can
+delete it by hand. Do not put the output directory inside a folder that a sync
+client uploads (iCloud Drive or Desktop, OneDrive, Dropbox), because the sync
+client could upload the unpacked firmware. Use `--work-dir /absolute/folder` to
+create the private folder somewhere else, for example on a larger local disk;
+the default is unchanged.
 
 What happens, in order:
 
@@ -178,7 +186,7 @@ What happens, in order:
    `--version`.
 2. The extractor unpacks the image into the private folder (for unblob:
    `unblob --extract-dir DIR firmware.bin`; for binwalk: `binwalk --extract
-   --matryoshka --directory DIR firmware.bin`).
+   --matryoshka --quiet --log LOG --directory DIR firmware.bin`).
 3. The generator looks for the root filesystem: a folder that has `etc` and at
    least one of `bin`, `sbin`, `lib`, `usr`, or at least three of them, or that
    holds a package database. If several are found, the one with the most files is
@@ -187,14 +195,25 @@ What happens, in order:
 4. Syft scans the chosen folder with the same settings as for `rootfs`.
 
 The `firmware` block in `provenance.json` records the image file name (without
-its folder), size and SHA-256, the extractor kind, version and the SHA-256 of its
-executable, the extraction time, the chosen root folder (relative to the
+its folder), size and SHA-256, the extractor kind and version, the SHA-256 of
+the file you passed to `--extractor` (`entry_file_sha256`), the extraction time, the chosen root folder (relative to the
 extraction folder), the number of extracted files, the entries extracted next to
 the chosen root that were not scanned, and whether the extractor reported
-errors. `sbom.cdx.json` carries the main facts as `cracken:firmware:*`
-properties so they travel with the file; it never contains extracted file lists
-or paths of your computer. `quality.json` gets a warning that the inventory came
+errors. The extractor digest identifies only that one file, not the installed
+software: with pipx it is a small launcher script, so it is not a pin of unblob's
+code; the version is the stronger statement. `sbom.cdx.json` carries the main
+facts as `cracken:firmware:*` properties so they travel with the file; it never
+contains extracted file lists or paths of your computer. It does contain the
+image file name (for example `firmware-2026.10.17.bin`), so name the file
+accordingly before you upload the SBOM. A name with unusual characters is
+replaced by `withheld-unsafe-characters` there; the exact name stays in
+`provenance.json`. `quality.json` gets a warning that the inventory came
 from an extracted image.
+
+Archives inside the chosen root filesystem may also be unpacked by the extractor
+(unblob unpacks nested containers into `*_extract` folders), and Syft then scans
+those folders as part of the root. The inventory can therefore include packages
+from nested archives that are not installed on the device.
 
 Extraction is best effort. Encrypted content, formats the extractor does not
 know and formats whose helper tool is missing are not unpacked, so packages
@@ -206,6 +225,15 @@ target type, the inventory does not establish completeness, absence of
 vulnerabilities or regulatory conformity. A build-time inventory from your build
 system, where one exists, is more accurate than an inventory read back from a
 finished image.
+
+**Security of the extraction step.** The generator itself never opens a network
+connection. The extractor and the many helper programs it starts (7z, sasquatch
+and others) are third-party tools that parse untrusted data with your own user
+rights. They are not sandboxed by this tool on macOS, and the network
+restrictions the generator sets for them (proxy variables pointing at a closed
+port) are a courtesy to well-behaved programs, not a barrier. For an image from a
+supplier you do not trust, run the whole command inside a virtual machine or
+container without network access.
 
 ## What leaves your machine
 

@@ -560,7 +560,7 @@ func normalizeSBOM(input []byte, ctx ProvenanceContext) ([]byte, Quality, error)
 		if ctx.Firmware.ExtractorReported {
 			quality.Warnings = append(quality.Warnings, "The extractor reported errors; parts of the image may not have been extracted.")
 		}
-		if n := len(ctx.Firmware.OtherRootCandidates); n > 0 {
+		if n := ctx.Firmware.OtherRootTotal; n > 0 {
 			quality.Warnings = append(quality.Warnings, fmt.Sprintf("%d further root filesystem candidate(s) were extracted but not scanned; only the largest was inventoried.", n))
 		}
 	}

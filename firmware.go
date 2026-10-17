@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +17,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -30,19 +33,20 @@ const (
 // tree. It describes the local extraction only; it never proves that the
 // extraction was complete.
 type FirmwareInfo struct {
-	ImageName           string
-	ImageSize           int64
-	ImageSHA256         string
-	ExtractorKind       string
-	ExtractorVersion    string
-	ExtractorSHA256     string
-	ExtractedAt         string
-	RootPath            string // slash-separated, relative to the extraction directory
-	ExtractedFiles      int
-	UnusedEntries       []string // entries beside the selected root, relative paths
-	UnusedEntriesTotal  int
-	OtherRootCandidates []string
-	ExtractorReported   bool // the extractor exited with an error status
+	ImageName            string
+	ImageSize            int64
+	ImageSHA256          string
+	ExtractorKind        string
+	ExtractorVersion     string
+	ExtractorEntrySHA256 string // the file named by --extractor after resolving links
+	ExtractedAt          string
+	RootPath             string // slash-separated, relative to the extraction directory
+	ExtractedFiles       int
+	UnusedEntries        []string // entries beside the selected root, relative paths
+	UnusedEntriesTotal   int
+	OtherRootCandidates  []string // capped list
+	OtherRootTotal       int
+	ExtractorReported    bool // the extractor, or its own log, reported a failure
 }
 
 var extractorVersionPattern = regexp.MustCompile(`^[0-9][0-9A-Za-z.+_-]{0,63}$`)
@@ -66,7 +70,7 @@ func validateFirmware(fw *FirmwareInfo) (*FirmwareInfo, error) {
 	if !extractorVersionPattern.MatchString(fw.ExtractorVersion) {
 		return nil, errors.New("invalid firmware extractor version")
 	}
-	if !digestPattern.MatchString(fw.ImageSHA256) || !digestPattern.MatchString(fw.ExtractorSHA256) {
+	if !digestPattern.MatchString(fw.ImageSHA256) || !digestPattern.MatchString(fw.ExtractorEntrySHA256) {
 		return nil, errors.New("invalid firmware digest")
 	}
 	if fw.ImageSize < 0 || fw.ExtractedFiles < 0 || fw.ImageName == "" || fw.RootPath == "" {
@@ -95,7 +99,7 @@ func firmwareProperties(fw *FirmwareInfo) [][2]string {
 		{"cracken:firmware:selected-root", firmwarePropertyValue(fw.RootPath)},
 		{"cracken:firmware:extracted-file-count", fmt.Sprint(fw.ExtractedFiles)},
 		{"cracken:firmware:unused-entry-count", fmt.Sprint(fw.UnusedEntriesTotal)},
-		{"cracken:firmware:other-root-candidates", fmt.Sprint(len(fw.OtherRootCandidates))},
+		{"cracken:firmware:other-root-candidates", fmt.Sprint(fw.OtherRootTotal)},
 		{"cracken:firmware:extractor-reported-errors", fmt.Sprint(fw.ExtractorReported)},
 	}
 }
@@ -109,13 +113,15 @@ func firmwareProvenance(fw *FirmwareInfo) map[string]any {
 		others = []string{}
 	}
 	return map[string]any{
-		"source_type":  firmwareTargetType,
-		"image":        map[string]any{"file_name": fw.ImageName, "size_bytes": fw.ImageSize, "sha256": fw.ImageSHA256},
-		"extractor":    map[string]string{"kind": fw.ExtractorKind, "version": fw.ExtractorVersion, "executable_sha256": fw.ExtractorSHA256},
+		"source_type": firmwareTargetType,
+		"image":       map[string]any{"file_name": fw.ImageName, "size_bytes": fw.ImageSize, "sha256": fw.ImageSHA256},
+		// The digest identifies the file given to --extractor, not the installed
+		// software: for pipx or uv installs it is a small launcher script.
+		"extractor":    map[string]string{"kind": fw.ExtractorKind, "version": fw.ExtractorVersion, "entry_file_sha256": fw.ExtractorEntrySHA256},
 		"extracted_at": fw.ExtractedAt, "selected_root": fw.RootPath, "extracted_file_count": fw.ExtractedFiles,
 		"unused_entries": unused, "unused_entry_count": fw.UnusedEntriesTotal,
-		"unused_entries_truncated":  fw.UnusedEntriesTotal > len(unused),
-		"other_root_candidates":     others,
+		"unused_entries_truncated": fw.UnusedEntriesTotal > len(unused),
+		"other_root_candidates":    others, "other_root_candidate_count": fw.OtherRootTotal,
 		"extractor_reported_errors": fw.ExtractorReported,
 	}
 }
@@ -153,8 +159,10 @@ func hashFile(path string) (string, int64, error) {
 }
 
 // Extractors need the user's PATH to find helpers such as 7z, and on macOS the
-// library path to find libmagic. Everything else is isolated, and network use
-// is pointed at a closed local port.
+// library path to find libmagic. The rest of the environment is replaced. The
+// proxy variables are a courtesy to well-behaved tools, not a sandbox: the
+// extractor and its helpers run with the user's own rights and could still open
+// connections.
 func extractorEnvironment(dir, binary string) []string {
 	path := filepath.Dir(binary)
 	if p := os.Getenv("PATH"); p != "" {
@@ -185,13 +193,24 @@ func extractorCommand(ctx context.Context, binary, work string, args ...string) 
 	return cmd
 }
 
+// runGrouped runs the command and then stops every process left in its group.
+// A helper that outlives the extractor must not keep writing into a folder
+// that is about to be deleted.
+func runGrouped(cmd *exec.Cmd) error {
+	err := cmd.Run()
+	if cmd.Process != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	return err
+}
+
 func extractorVersion(ctx context.Context, binary, work string) (string, error) {
 	vctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	cmd := extractorCommand(vctx, binary, work, "--version")
 	out := &cappedBuffer{limit: 64 << 10}
 	cmd.Stdout, cmd.Stderr = out, out
-	if err := cmd.Run(); err != nil || out.overflow {
+	if err := runGrouped(cmd); err != nil || out.overflow {
 		return "", errors.New("cannot run the extractor to read its version")
 	}
 	v := versionInOutput.FindString(out.String())
@@ -201,11 +220,14 @@ func extractorVersion(ctx context.Context, binary, work string) (string, error) 
 	return v, nil
 }
 
-// runExtractor reports whether the extractor exited with an error status. Real
-// images often contain one chunk that cannot be unpacked, so partial output is
-// kept and the problem is recorded instead of hiding or failing everything.
+// runExtractor reports whether the extraction is known to have failed in part.
+// Real images often contain one chunk that cannot be unpacked, so partial output
+// is kept and the problem is recorded instead of hiding or failing everything.
+// unblob signals this by its exit status; binwalk 3 exits 0 even when a helper
+// is missing, so its JSON log is read instead.
 func runExtractor(ctx context.Context, kind, binary, image, extractDir, work string) (reportedErrors bool, err error) {
 	var args []string
+	binwalkLog := filepath.Join(work, "binwalk.json")
 	switch kind {
 	case "unblob":
 		// Randomness analysis only draws entropy charts; it is not needed here.
@@ -213,30 +235,68 @@ func runExtractor(ctx context.Context, kind, binary, image, extractDir, work str
 	case "binwalk":
 		// -M descends into extracted containers; without it a squashfs inside
 		// an update wrapper would stay packed.
-		args = []string{"--extract", "--matryoshka", "--quiet", "--directory", extractDir, image}
+		args = []string{"--extract", "--matryoshka", "--quiet", "--log", binwalkLog, "--directory", extractDir, image}
 	default:
 		return false, errors.New("unsupported extractor kind")
 	}
 	ectx, cancel := context.WithTimeout(ctx, extractorTimeout)
 	defer cancel()
 	cmd := extractorCommand(ectx, binary, work, args...)
-	// Child diagnostics can carry paths and file names from the image; they are
-	// never returned.
-	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
-	if err := cmd.Run(); err != nil {
+	// Nil streams are /dev/null, so no pipe can be held open by a helper. Child
+	// diagnostics can carry paths and file names from the image and are never
+	// returned.
+	cmd.Stdout, cmd.Stderr = nil, nil
+	if err := runGrouped(cmd); err != nil {
 		var exit *exec.ExitError
 		if ectx.Err() != nil {
 			return false, errors.New("firmware extraction timed out or was cancelled")
 		}
 		if !errors.As(err, &exit) {
-			return false, errors.New("cannot start the extractor")
+			return false, errors.New("firmware extraction could not run; check the extractor installation")
 		}
 		reportedErrors = true
 	}
+	if kind == "binwalk" && binwalkLogShowsFailure(binwalkLog) {
+		reportedErrors = true
+	}
 	if info, err := os.Lstat(extractDir); err != nil || !info.IsDir() {
-		return reportedErrors, errors.New("firmware extraction failed and produced no output; check the extractor installation and its helper tools (for unblob: unblob --show-external-dependencies)")
+		return reportedErrors, errors.New("firmware extraction failed and produced no output; " + helperHint(kind))
 	}
 	return reportedErrors, nil
+}
+
+func helperHint(kind string) string {
+	if kind == "binwalk" {
+		return "check the extractor installation; helper tools such as 7z or sasquatch must be on PATH (binwalk --list shows the extractors it uses)"
+	}
+	return "check the extractor installation and its helper tools (unblob --show-external-dependencies lists them)"
+}
+
+// binwalkLogShowsFailure reads binwalk's JSON log. An unreadable log counts as a
+// failure, because success can then not be confirmed.
+func binwalkLogShowsFailure(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) > 64<<20 {
+		return true
+	}
+	var log []struct {
+		Analysis struct {
+			Extractions map[string]struct {
+				Success bool `json:"success"`
+			} `json:"extractions"`
+		} `json:"Analysis"`
+	}
+	if json.Unmarshal(data, &log) != nil {
+		return true
+	}
+	for _, entry := range log {
+		for _, e := range entry.Analysis.Extractions {
+			if !e.Success {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // A directory looks like a root filesystem when it has the usual top-level
@@ -255,27 +315,42 @@ func looksLikeRootFS(dir string) bool {
 			markers++
 		}
 	}
-	if (hasEtc && markers >= 2) || markers >= 3 {
-		return true
-	}
+	return (hasEtc && markers >= 2) || markers >= 3 || hasPackageDatabase(dir)
+}
+
+func hasPackageDatabase(dir string) bool {
 	for _, db := range []string{"var/lib/dpkg/status", "lib/apk/db/installed", "var/lib/opkg/status", "usr/lib/opkg/status", "usr/lib/sysimage/rpm", "var/lib/rpm"} {
-		if exists(db) {
+		if _, err := os.Lstat(filepath.Join(dir, filepath.FromSlash(db))); err == nil {
 			return true
 		}
 	}
 	return false
 }
 
-func countNonDirs(ctx context.Context, root string) (int, error) {
+// isImageCopy recognizes what binwalk leaves in its output: a link to (or a
+// copy of) the image itself, which is not extracted data.
+func isImageCopy(path, image string, imageSize int64) bool {
+	st, err := os.Lstat(path)
+	if err != nil {
+		return false
+	}
+	if st.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(path)
+		return err == nil && target == image
+	}
+	return st.Mode().IsRegular() && st.Size() == imageSize && filepath.Base(path) == filepath.Base(image)
+}
+
+func countNonDirs(ctx context.Context, root string, skip func(string) bool) (int, error) {
 	n := 0
-	err := filepath.WalkDir(root, func(_ string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // unreadable subtrees are skipped, not followed
 		}
 		if cerr := contextError(ctx); cerr != nil {
 			return cerr
 		}
-		if !d.IsDir() {
+		if !d.IsDir() && (skip == nil || !skip(p)) {
 			n++
 		}
 		return nil
@@ -286,11 +361,14 @@ func countNonDirs(ctx context.Context, root string) (int, error) {
 type rootCandidate struct {
 	rel   string
 	files int
+	db    bool
 }
 
-// selectRootFS chooses the candidate tree with the most files; ties go to the
-// lexicographically first path so the choice is reproducible.
-func selectRootFS(ctx context.Context, extractDir string) (string, []string, error) {
+// selectRootFS prefers trees that hold a package database (an overlay or data
+// partition rarely does), then the tree with the most files; ties go to the
+// lexicographically first path so the choice is reproducible. It returns the
+// root, a capped list of other candidates and their full count.
+func selectRootFS(ctx context.Context, extractDir string) (string, []string, int, error) {
 	var found []rootCandidate
 	err := filepath.WalkDir(extractDir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || !d.IsDir() {
@@ -304,22 +382,25 @@ func selectRootFS(ctx context.Context, extractDir string) (string, []string, err
 			if relErr != nil {
 				return nil
 			}
-			n, cerr := countNonDirs(ctx, p)
+			n, cerr := countNonDirs(ctx, p, nil)
 			if cerr != nil {
 				return cerr
 			}
-			found = append(found, rootCandidate{filepath.ToSlash(rel), n})
+			found = append(found, rootCandidate{filepath.ToSlash(rel), n, hasPackageDatabase(p)})
 			return filepath.SkipDir // nested trees belong to this root
 		}
 		return nil
 	})
 	if err != nil {
-		return "", nil, err
+		return "", nil, 0, err
 	}
 	if len(found) == 0 {
-		return "", nil, errNoRootFS
+		return "", nil, 0, errNoRootFS
 	}
 	sort.Slice(found, func(i, j int) bool {
+		if found[i].db != found[j].db {
+			return found[i].db
+		}
 		if found[i].files != found[j].files {
 			return found[i].files > found[j].files
 		}
@@ -331,15 +412,21 @@ func selectRootFS(ctx context.Context, extractDir string) (string, []string, err
 			others = append(others, c.rel)
 		}
 	}
-	return found[0].rel, others, nil
+	return found[0].rel, others, len(found) - 1, nil
 }
 
 var errNoRootFS = errors.New("no root filesystem found")
 
 // topLevelListing lists the entries of the extraction directory (one wrapper
 // level is unwrapped), so a failed run can say what was extracted.
-func topLevelListing(extractDir string) string {
-	entries, err := os.ReadDir(extractDir)
+func topLevelListing(extractDir, image string, imageSize int64) string {
+	all, err := os.ReadDir(extractDir)
+	var entries []os.DirEntry
+	for _, e := range all {
+		if !isImageCopy(filepath.Join(extractDir, e.Name()), image, imageSize) {
+			entries = append(entries, e)
+		}
+	}
 	if err == nil && len(entries) == 1 && entries[0].IsDir() {
 		if inner, e := os.ReadDir(filepath.Join(extractDir, entries[0].Name())); e == nil {
 			entries = inner
@@ -363,29 +450,36 @@ func topLevelListing(extractDir string) string {
 	}
 	text := strings.Join(shown, ", ")
 	if more > 0 {
-		text += fmt.Sprintf(" … and %d more", more)
+		text += fmt.Sprintf(" ... and %d more", more)
 	}
-	if len(text) > maxUnsafeListedBytes {
-		text = text[:maxUnsafeListedBytes] + "…"
-	}
-	return strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
+	// File names come from the image: neutralize control and bidirectional
+	// formatting characters before they reach a terminal.
+	text = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
 			return '?'
 		}
 		return r
 	}, text)
+	if len(text) > maxUnsafeListedBytes {
+		cut := maxUnsafeListedBytes
+		for cut > 0 && !utf8.RuneStart(text[cut]) {
+			cut--
+		}
+		text = text[:cut] + "..."
+	}
+	return text
 }
 
 // entriesBeside lists, level by level along the path to the selected root, the
 // entries that were extracted next to it and therefore not scanned.
-func entriesBeside(extractDir, rootRel string) (listed []string, total int) {
+func entriesBeside(extractDir, rootRel, image string, imageSize int64) (listed []string, total int) {
 	parts := strings.Split(rootRel, "/")
 	dir, prefix := extractDir, ""
 	for _, part := range parts {
 		entries, err := os.ReadDir(dir)
 		if err == nil {
 			for _, e := range entries {
-				if e.Name() == part {
+				if e.Name() == part || isImageCopy(filepath.Join(dir, e.Name()), image, imageSize) {
 					continue
 				}
 				total++
@@ -437,13 +531,18 @@ func extractFirmware(ctx context.Context, o generateOptions, now func() time.Tim
 	if err = contextError(ctx); err != nil {
 		return
 	}
-	tmp, err := os.MkdirTemp(filepath.Dir(o.output), ".cracken-sbom-extract-")
+	parent := o.workDir
+	if parent == "" {
+		parent = filepath.Dir(o.output)
+	}
+	created, err := os.MkdirTemp(parent, ".cracken-sbom-extract-")
 	if err != nil {
-		err = errors.New("cannot create private extraction workspace beside the output directory")
+		err = errors.New("cannot create private extraction workspace; check --work-dir or the output parent")
 		return
 	}
-	cleanup = func() { forceRemove(tmp) }
-	if tmp, err = filepath.EvalSymlinks(tmp); err != nil {
+	cleanup = func() { forceRemove(created) }
+	tmp, err := filepath.EvalSymlinks(created)
+	if err != nil {
 		err = errors.New("cannot resolve extraction workspace")
 		return
 	}
@@ -461,13 +560,13 @@ func extractFirmware(ctx context.Context, o generateOptions, now func() time.Tim
 		return
 	}
 	extractedAt := now().UTC().Format(time.RFC3339)
-	rootRel, others, err := selectRootFS(ctx, extractDir)
+	rootRel, others, otherTotal, err := selectRootFS(ctx, extractDir)
 	if errors.Is(err, errNoRootFS) {
 		hint := ""
 		if reportedErrors {
-			hint = " The extractor reported errors, so a missing helper tool may be the cause (for unblob: unblob --show-external-dependencies)."
+			hint = " The extractor reported errors, so a missing helper tool may be the cause (" + helperHint(kind) + ")."
 		}
-		err = fmt.Errorf("the image was extracted but no root filesystem (a directory with etc, bin, lib or a package database) was found. Extracted top-level entries: %s.%s Unpack the filesystem yourself and use --target-type rootfs", topLevelListing(extractDir), hint)
+		err = fmt.Errorf("the image was extracted but no root filesystem (a directory with etc, bin, lib or a package database) was found. Extracted top-level entries: %s.%s Unpack the filesystem yourself and use --target-type rootfs", topLevelListing(extractDir, o.target, imageSize), hint)
 		return
 	}
 	if err != nil {
@@ -478,20 +577,17 @@ func extractFirmware(ctx context.Context, o generateOptions, now func() time.Tim
 		err = errors.New("selected root filesystem is not a plain directory")
 		return
 	}
-	files, err := countNonDirs(ctx, extractDir)
+	// binwalk leaves a link to the image in its output; it is not extracted data.
+	files, err := countNonDirs(ctx, extractDir, func(p string) bool { return isImageCopy(p, o.target, imageSize) })
 	if err != nil {
 		return
 	}
-	// binwalk stores a copy of the image next to its results; it is not extracted data.
-	if st, serr := os.Lstat(filepath.Join(extractDir, filepath.Base(o.target))); serr == nil && st.Mode().IsRegular() && st.Size() == imageSize && files > 0 {
-		files--
-	}
-	unused, unusedTotal := entriesBeside(extractDir, rootRel)
+	unused, unusedTotal := entriesBeside(extractDir, rootRel, o.target, imageSize)
 	info = &FirmwareInfo{
 		ImageName: filepath.Base(o.target), ImageSize: imageSize, ImageSHA256: imageHash,
-		ExtractorKind: kind, ExtractorVersion: version, ExtractorSHA256: extractorHash,
+		ExtractorKind: kind, ExtractorVersion: version, ExtractorEntrySHA256: extractorHash,
 		ExtractedAt: extractedAt, RootPath: rootRel, ExtractedFiles: files,
-		UnusedEntries: unused, UnusedEntriesTotal: unusedTotal, OtherRootCandidates: others, ExtractorReported: reportedErrors,
+		UnusedEntries: unused, UnusedEntriesTotal: unusedTotal, OtherRootCandidates: others, OtherRootTotal: otherTotal, ExtractorReported: reportedErrors,
 	}
 	return root, info, cleanup, nil
 }

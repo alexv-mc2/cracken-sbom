@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const usage = "invalid flags; use generate --target-type TYPE --target PATH --target-id ID --output NEW-DIR --syft ABSOLUTE-BINARY [--allow-incomplete] [--extractor ABSOLUTE-BINARY [--extractor-kind unblob|binwalk]]"
+const usage = "invalid flags; use generate --target-type TYPE --target PATH --target-id ID --output NEW-DIR --syft ABSOLUTE-BINARY [--allow-incomplete] [--extractor ABSOLUTE-BINARY [--extractor-kind unblob|binwalk] [--work-dir ABSOLUTE-DIR]]"
 
 // Release builds bind this value to their exact tag with -ldflags -X.
 var toolVersion = "1.1.0"
@@ -26,7 +26,7 @@ type generateOptions struct {
 	targetType, target, targetID, output, syft string
 	allowIncomplete                            bool
 	// Firmware images only: the extractor as given and as resolved, and its kind.
-	extractor, extractorGiven, extractorKind string
+	extractor, extractorGiven, extractorKind, workDir string
 }
 
 func main() {
@@ -54,6 +54,7 @@ func parseOptions(args []string) (generateOptions, error) {
 	fs.BoolVar(&o.allowIncomplete, "allow-incomplete", false, "acknowledge incomplete metadata")
 	fs.StringVar(&o.extractor, "extractor", "", "absolute path to unblob or binwalk (firmware-image only)")
 	fs.StringVar(&o.extractorKind, "extractor-kind", "", "unblob or binwalk (firmware-image only)")
+	fs.StringVar(&o.workDir, "work-dir", "", "absolute directory for the private extraction folder (firmware-image only)")
 	if fs.Parse(args) != nil || fs.NArg() != 0 {
 		return o, errors.New(usage)
 	}
@@ -62,14 +63,17 @@ func parseOptions(args []string) (generateOptions, error) {
 	}
 	switch o.targetType {
 	case "rootfs", "npm", "python", "oci-archive", "docker-archive":
-		if o.extractor != "" || o.extractorKind != "" {
-			return o, errors.New("--extractor and --extractor-kind are only valid with --target-type firmware-image")
+		if o.extractor != "" || o.extractorKind != "" || o.workDir != "" {
+			return o, errors.New("--extractor, --extractor-kind and --work-dir are only valid with --target-type firmware-image")
 		}
 	case firmwareTargetType:
 		if !filepath.IsAbs(o.extractor) {
 			return o, errors.New("firmware-image requires --extractor with an absolute path to unblob or binwalk")
 		}
 		o.extractorGiven = o.extractor
+		if o.workDir != "" && !filepath.IsAbs(o.workDir) {
+			return o, errors.New("--work-dir must be an absolute path")
+		}
 	default:
 		return o, errors.New("target type must be rootfs, npm, python, oci-archive, docker-archive or firmware-image")
 	}
@@ -143,6 +147,17 @@ func validatePaths(o *generateOptions) error {
 			return errors.New("extractor must be an existing regular executable")
 		}
 		o.extractor = extractor
+		if o.workDir != "" {
+			work, err := filepath.EvalSymlinks(o.workDir)
+			if err != nil {
+				return errors.New("--work-dir must be an existing local directory")
+			}
+			workInfo, err := os.Stat(work)
+			if err != nil || !workInfo.IsDir() {
+				return errors.New("--work-dir must be an existing local directory")
+			}
+			o.workDir = work
+		}
 	}
 	o.target, o.syft, o.output = target, engine, out
 	return nil
@@ -172,7 +187,7 @@ func runCLI(ctx context.Context, args []string, stdout io.Writer, runner engineR
 		TargetIdentifier: o.targetID, GeneratedAt: now().UTC().Format(time.RFC3339),
 	}
 	// Validate asserted provenance before spending time scanning or reading input.
-	if _, err := createProvenance([]byte("{}"), provenanceCtx, Quality{}); err != nil {
+	if _, err := validateContext(provenanceCtx); err != nil {
 		return errors.New("target identifier or provenance metadata is invalid")
 	}
 	scanTarget, scanType := o.target, o.targetType

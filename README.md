@@ -165,7 +165,7 @@ output, and that no extraction folder is left behind. The same check is
 `tests/firmware_e2e_linux.sh`. On macOS the earlier manual runs used a stand-in
 for `sasquatch`, so the SquashFS path there is tested less. The CI job covers one
 image of one device family; ext4, FIT and vendor-specific formats, other
-extractor releases and images over 20 MB are not part of it.
+extractor releases and larger images (the test image is 7 MB) are not part of it.
 
 The generator passes only options that the installed unblob
 lists in its `--help` (for unblob it turns off randomness analysis when the

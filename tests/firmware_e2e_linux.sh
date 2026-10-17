@@ -6,7 +6,7 @@
 # generator against a real OpenWrt image with real unblob and real sasquatch, and
 # asserts the facts a user relies on. Everything it needs is passed in; it
 # downloads nothing. CI provisions the inputs (see the firmware-linux-e2e job in
-# .github/workflows/ci.yml); the same script runs on any Linux machine.
+# .github/workflows/firmware-linux-e2e.yml); the same script runs on any Linux machine.
 #
 # Environment:
 #   GENERATOR      built cracken-sbom executable (absolute path)
@@ -106,17 +106,24 @@ for kind in kinds:
     require(fw.get("extractor", {}).get("kind") == kind, f"{kind}: wrong extractor kind")
     require(re.fullmatch(r"[0-9]+(\.[0-9]+)+", fw["extractor"].get("version", "")), f"{kind}: bad extractor version")
     require(fw.get("extracted_file_count", 0) > 500, f"{kind}: too few extracted files")
-    require("squashfs" in fw.get("selected_root", "") or kind == "binwalk", f"{kind}: root is not the SquashFS")
+    require("squashfs" in fw.get("selected_root", ""), f"{kind}: root is not the SquashFS")
 
     properties = {p["name"]: p["value"] for p in sbom["metadata"]["properties"]}
     firmware_properties = {k: v for k, v in properties.items() if k.startswith("cracken:firmware:")}
-    require(len(firmware_properties) == 12, f"{kind}: expected 12 cracken:firmware: properties, got {len(firmware_properties)}")
+    required_properties = {
+        "source-type", "image-name", "image-size-bytes", "image-sha256", "extractor", "extractor-version",
+        "extracted-at", "selected-root", "extracted-file-count", "unused-entry-count",
+        "other-root-candidates", "extractor-reported-errors",
+    }
+    missing = {f"cracken:firmware:{n}" for n in required_properties} - set(firmware_properties)
+    require(not missing, f"{kind}: missing properties {sorted(missing)}")
     require(properties["cracken:firmware:image-sha256"] == image_sha256, f"{kind}: property digest")
     require(properties["cracken:firmware:extractor"] == kind, f"{kind}: property extractor")
 
     components = sbom.get("components", [])
     names = {c["name"] for c in components}
-    require(len(components) >= 100, f"{kind}: only {len(components)} components")
+    # Reference value: 375 components (unblob 26.6.4, binwalk 3.1.0, Syft from engine-manifest.json).
+    require(len(components) >= 300, f"{kind}: only {len(components)} components")
     # OpenWrt base packages that every sysupgrade image of this release carries.
     for expected in ("busybox", "base-files", "dropbear", "libc", "uci", "netifd"):
         require(expected in names, f"{kind}: component {expected!r} missing")

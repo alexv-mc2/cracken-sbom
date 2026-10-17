@@ -18,7 +18,9 @@ permissions:
 jobs:
   firmware-linux-e2e:
     name: Firmware image, real unblob and sasquatch
-    runs-on: ubuntu-latest
+    # Pinned like release.yml: the hashed requirements are for CPython 3.12 and the
+    # `7zip` package name is specific to Ubuntu 24.04.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       # OpenWrt 24.10.8, ath79 Archer C7 v2 sysupgrade image (7.0 MB, SquashFS rootfs).
@@ -63,18 +65,33 @@ jobs:
           curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
             --retry 3 --output "$RUNNER_TEMP/sasquatch.deb" "$SASQUATCH_URL"
           echo "$SASQUATCH_SHA256  $RUNNER_TEMP/sasquatch.deb" | sha256sum --check --strict -
-          # Other helpers named by `unblob --show-external-dependencies`, from Ubuntu.
+          # Other helpers named by `unblob --show-external-dependencies`, from Ubuntu,
+          # and the build dependencies of binwalk (next step). All apt work is here.
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y libmagic1 lz4 lzop zstd xz-utils unar 7zip \
-            "$RUNNER_TEMP/sasquatch.deb"
-          "$RUNNER_TEMP/unblob-venv/bin/unblob" --version
-          "$RUNNER_TEMP/unblob-venv/bin/unblob" --show-external-dependencies || true
+            build-essential pkg-config libfontconfig1-dev liblzma-dev "$RUNNER_TEMP/sasquatch.deb"
+          # Let unblob find its Python-based helpers (jefferson, ubireader_*).
+          echo "$RUNNER_TEMP/unblob-venv/bin" >> "$GITHUB_PATH"
+          export PATH="$RUNNER_TEMP/unblob-venv/bin:$PATH"
+          unblob --version
+          # Missing optional helpers make this exit non-zero; sasquatch must be present.
+          unblob --show-external-dependencies | tee "$RUNNER_TEMP/unblob-deps.txt" || true
+          grep -Eq '^[[:space:]]*sasquatch[[:space:]]+✓' "$RUNNER_TEMP/unblob-deps.txt"
+      - name: Cache binwalk build
+        id: binwalk-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/binwalk
+          key: binwalk-3.1.0-${{ runner.os }}
       - name: Build binwalk 3.1.0 from the locked crates.io release
+        if: steps.binwalk-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          sudo apt-get install --no-install-recommends -y build-essential pkg-config libfontconfig1-dev liblzma-dev
           # --locked uses the dependency versions and checksums shipped in the crate.
           cargo install binwalk --version 3.1.0 --locked --root "$RUNNER_TEMP/binwalk"
+      - name: Show binwalk version
+        run: |
+          set -euo pipefail
           "$RUNNER_TEMP/binwalk/bin/binwalk" --version
       - name: Provision verification tools and authenticated engine
         run: |
@@ -95,3 +112,11 @@ jobs:
             IMAGE="$RUNNER_TEMP/image/openwrt.bin" IMAGE_SHA256="$IMAGE_SHA256" \
             OUTPUT_ROOT="$RUNNER_TEMP/e2e-output" \
             bash tests/firmware_e2e_linux.sh
+      - name: Keep evidence of a failed run
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: firmware-e2e-output
+          path: ${{ runner.temp }}/e2e-output
+          if-no-files-found: ignore
+          retention-days: 7

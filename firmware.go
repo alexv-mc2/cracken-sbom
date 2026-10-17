@@ -373,9 +373,9 @@ type rootCandidate struct {
 	db    bool
 }
 
-// selectRootFS prefers trees that hold a package database (an overlay or data
-// partition rarely does), then the tree with the most files; ties go to the
-// lexicographically first path so the choice is reproducible. It returns the
+// selectRootFS chooses the candidate tree with the most files; of equal trees one
+// that holds a package database wins, then the lexicographically first path, so
+// the choice is reproducible. It returns the
 // root, a capped list of other candidates and their full count.
 func selectRootFS(ctx context.Context, extractDir string) (string, []string, int, error) {
 	var found []rootCandidate
@@ -407,11 +407,11 @@ func selectRootFS(ctx context.Context, extractDir string) (string, []string, int
 		return "", nil, 0, errNoRootFS
 	}
 	sort.Slice(found, func(i, j int) bool {
-		if found[i].db != found[j].db {
-			return found[i].db
-		}
 		if found[i].files != found[j].files {
 			return found[i].files > found[j].files
+		}
+		if found[i].db != found[j].db {
+			return found[i].db
 		}
 		return found[i].rel < found[j].rel
 	})
@@ -532,6 +532,11 @@ func extractFirmware(ctx context.Context, o generateOptions, now func() time.Tim
 		err = errors.New("cannot read the extractor binary")
 		return
 	}
+	imageBefore, statErr := os.Stat(o.target)
+	if statErr != nil {
+		err = errors.New("cannot read the firmware image")
+		return
+	}
 	imageHash, imageSize, err := hashFile(o.target)
 	if err != nil {
 		err = errors.New("cannot read the firmware image")
@@ -566,6 +571,12 @@ func extractFirmware(ctx context.Context, o generateOptions, now func() time.Tim
 	}
 	reportedErrors, err := runExtractor(ctx, kind, o.extractor, o.target, extractDir, work)
 	if err != nil {
+		return
+	}
+	// The extractor opens the image by name. If the file was replaced or changed
+	// since it was hashed, the recorded digest would describe other bytes.
+	if after, serr := os.Stat(o.target); serr != nil || !os.SameFile(imageBefore, after) || after.Size() != imageSize || !after.ModTime().Equal(imageBefore.ModTime()) {
+		err = errors.New("the firmware image changed while it was being processed; wait until it is complete and run again")
 		return
 	}
 	extractedAt := now().UTC().Format(time.RFC3339)

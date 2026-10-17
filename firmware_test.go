@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -532,10 +533,10 @@ func TestFirmwareImageHelperOutlivingExtractorIsStopped(t *testing.T) {
 	}
 	pid, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
 	deadline := time.Now().Add(3 * time.Second)
-	for syscall.Kill(pid, 0) == nil && time.Now().Before(deadline) {
+	for processRuns(pid) && time.Now().Before(deadline) {
 		time.Sleep(50 * time.Millisecond)
 	}
-	if syscall.Kill(pid, 0) == nil {
+	if processRuns(pid) {
 		_ = syscall.Kill(pid, syscall.SIGKILL)
 		t.Fatal("helper process survived the extraction")
 	}
@@ -592,7 +593,7 @@ func TestFirmwareImageWorkDir(t *testing.T) {
 	}
 }
 
-func TestSelectRootFSPrefersPackageDatabaseAndCountsAllCandidates(t *testing.T) {
+func TestSelectRootFSLargestWinsDatabaseBreaksTiesAndAllCandidatesAreCounted(t *testing.T) {
 	dir := t.TempDir()
 	mkfile(t, dir, "big/etc/a", "big/bin/a", "big/lib/a", "big/usr/a", "big/var/a")
 	mkfile(t, dir, "small/etc/a", "small/bin/a", "small/var/lib/opkg/status")
@@ -600,8 +601,28 @@ func TestSelectRootFSPrefersPackageDatabaseAndCountsAllCandidates(t *testing.T) 
 		mkfile(t, dir, fmt.Sprintf("extra%02d/etc/a", i), fmt.Sprintf("extra%02d/bin/a", i))
 	}
 	root, others, total, err := selectRootFS(context.Background(), dir)
-	if err != nil || root != "small" || total != 25 || len(others) != maxListedCandidates {
+	if err != nil || root != "big" || total != 25 || len(others) != maxListedCandidates {
 		t.Fatalf("root=%q listed=%d total=%d err=%v", root, len(others), total, err)
+	}
+	// Equal size: the tree with a package database wins over an earlier name.
+	tie := t.TempDir()
+	mkfile(t, tie, "a/etc/x", "a/bin/x", "b/etc/x", "b/var/lib/opkg/status")
+	if root, _, _, err := selectRootFS(context.Background(), tie); err != nil || root != "b" {
+		t.Fatalf("tie root=%q err=%v", root, err)
+	}
+}
+
+func TestFirmwareImageChangedDuringExtractionFails(t *testing.T) {
+	// The fake extractor rewrites the image while "extracting".
+	script := strings.Replace(fakeExtractorScript, "%s", "echo changed >> \"$image\"", 1)
+	script = strings.Replace(script, "while [ $# -gt 0 ]; do", "for image in \"$@\"; do :; done\nwhile [ $# -gt 0 ]; do", 1)
+	f := newFirmwareFixture(t, script, "unblob")
+	err := runCLI(context.Background(), f.args, &bytes.Buffer{}, successRunner, fixedNow)
+	if err == nil || !strings.Contains(err.Error(), "changed while") {
+		t.Fatalf("modified image accepted: %v", err)
+	}
+	if _, statErr := os.Stat(f.output); !os.IsNotExist(statErr) || stagingLeft(f.dir) {
+		t.Fatal("failure left output or workspace")
 	}
 }
 
@@ -626,4 +647,19 @@ func TestFinalProvenanceRequiresFirmwareBlock(t *testing.T) {
 	if _, err := createProvenance([]byte("{}\n"), ctx, Quality{}); err == nil {
 		t.Fatal("final provenance without firmware facts accepted")
 	}
+}
+
+// processRuns is false for a missing process and for a zombie: where PID 1 does
+// not reap orphans (some containers), a killed helper stays listed as a zombie
+// although it can no longer run or write.
+func processRuns(pid int) bool {
+	if syscall.Kill(pid, 0) != nil {
+		return false
+	}
+	out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return false
+	}
+	state := strings.TrimSpace(string(out))
+	return state != "" && !strings.HasPrefix(state, "Z")
 }

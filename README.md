@@ -183,7 +183,9 @@ the default is unchanged.
 What happens, in order:
 
 1. The generator computes the SHA-256 of the image and runs the extractor with
-   `--version`.
+   `--version`. If the image file is replaced or modified while the extractor
+   works, the run stops with an error instead of recording a digest of other
+   bytes.
 2. The extractor unpacks the image into the private folder (for unblob:
    `unblob --extract-dir DIR firmware.bin`; for binwalk: `binwalk --extract
    --matryoshka --quiet --log LOG --directory DIR firmware.bin`).

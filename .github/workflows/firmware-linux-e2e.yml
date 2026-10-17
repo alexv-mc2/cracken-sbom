@@ -1,0 +1,89 @@
+name: Firmware Linux end-to-end
+
+# Runs the firmware-image target with REAL unblob and REAL sasquatch (Linux-only
+# SquashFS helper) on a real OpenWrt image. It lives in its own workflow, not in
+# ci.yml, because release.yml calls ci.yml as its test gate: a job that downloads
+# from PyPI, GitHub and downloads.openwrt.org must not be able to block a release.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  firmware-linux-e2e:
+    name: Firmware image, real unblob and sasquatch
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # OpenWrt 24.10.8, ath79 Archer C7 v2 sysupgrade image (7.0 MB, SquashFS rootfs).
+      # SHA-256 from https://downloads.openwrt.org/releases/24.10.8/targets/ath79/generic/sha256sums
+      IMAGE_URL: https://downloads.openwrt.org/releases/24.10.8/targets/ath79/generic/openwrt-24.10.8-ath79-generic-tplink_archer-c7-v2-squashfs-sysupgrade.bin
+      IMAGE_SHA256: 6a1d16dd3cb7c6457edf873e39e724e8dd1ba4ca670b843d37b0d42b31902919
+      # sasquatch v4.5.1-6 (onekey-sec), the .deb that unblob's own install-deps.sh uses.
+      SASQUATCH_URL: https://github.com/onekey-sec/sasquatch/releases/download/sasquatch-v4.5.1-6/sasquatch_1.0_amd64.deb
+      SASQUATCH_SHA256: efbc92bd27594e01211e1b582f105a463a0017360a0746a93de3f283906ade95
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version: 1.26.1
+          cache: false
+      - name: Cache OpenWrt image
+        id: image-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/image
+          key: openwrt-image-${{ env.IMAGE_SHA256 }}
+      - name: Download and verify OpenWrt image
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/image"
+          image="$RUNNER_TEMP/image/openwrt.bin"
+          if [ ! -f "$image" ]; then
+            curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+              --retry 3 --output "$image" "$IMAGE_URL"
+          fi
+          echo "$IMAGE_SHA256  $image" | sha256sum --check --strict -
+      - name: Install unblob 26.6.4 and its helper tools
+        run: |
+          set -euo pipefail
+          # Python package: every dependency pinned by hash (wheels only).
+          python3 -m venv "$RUNNER_TEMP/unblob-venv"
+          "$RUNNER_TEMP/unblob-venv/bin/pip" install --require-hashes --only-binary=:all: \
+            -r tests/requirements-unblob.txt
+          # sasquatch: pinned release package, digest checked before installing.
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            --retry 3 --output "$RUNNER_TEMP/sasquatch.deb" "$SASQUATCH_URL"
+          echo "$SASQUATCH_SHA256  $RUNNER_TEMP/sasquatch.deb" | sha256sum --check --strict -
+          # Other helpers named by `unblob --show-external-dependencies`, from Ubuntu.
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libmagic1 lz4 lzop zstd xz-utils unar 7zip \
+            "$RUNNER_TEMP/sasquatch.deb"
+          "$RUNNER_TEMP/unblob-venv/bin/unblob" --version
+          "$RUNNER_TEMP/unblob-venv/bin/unblob" --show-external-dependencies || true
+      - name: Provision verification tools and authenticated engine
+        run: |
+          set -euo pipefail
+          scripts/provision-cosign.sh "$RUNNER_TEMP/cosign"
+          COSIGN="$RUNNER_TEMP/cosign" SYFT_CACHE="$RUNNER_TEMP/syft-cache" \
+            scripts/provision-syft.sh "$RUNNER_TEMP/syft"
+      - name: Build the generator
+        run: |
+          set -euo pipefail
+          GOTOOLCHAIN=local CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/cracken-sbom" .
+      - name: Generate SBOM from the OpenWrt image and check it
+        run: |
+          set -euo pipefail
+          GENERATOR="$RUNNER_TEMP/cracken-sbom" SYFT="$RUNNER_TEMP/syft" \
+            UNBLOB="$RUNNER_TEMP/unblob-venv/bin/unblob" \
+            IMAGE="$RUNNER_TEMP/image/openwrt.bin" IMAGE_SHA256="$IMAGE_SHA256" \
+            OUTPUT_ROOT="$RUNNER_TEMP/e2e-output" \
+            bash tests/firmware_e2e_linux.sh

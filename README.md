@@ -127,7 +127,8 @@ This tool does not provide a Yocto adapter or conversion.
 ## Firmware images
 
 Sometimes a contractor hands over only a binary image (`firmware.bin`) and no
-build inventory. With `--target-type firmware-image` the generator unpacks the
+build inventory. The `firmware-image` target is available from cracken-sbom
+v1.1.0. With `--target-type firmware-image` the generator unpacks the
 image on your computer with an open-source extractor, picks the root filesystem
 it finds, and then runs exactly the same steps as for a `rootfs` target. The
 image is never uploaded and the generator never contacts a network.

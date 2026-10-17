@@ -18,7 +18,7 @@ import (
 const usage = "invalid flags; use generate --target-type TYPE --target PATH --target-id ID --output NEW-DIR --syft ABSOLUTE-BINARY [--allow-incomplete] [--extractor ABSOLUTE-BINARY [--extractor-kind unblob|binwalk]]"
 
 // Release builds bind this value to their exact tag with -ldflags -X.
-var toolVersion = "0.1.0"
+var toolVersion = "1.1.0"
 
 const maxUploadBytes = 10 << 20
 

@@ -6,6 +6,7 @@
 # several helper tools; see README "Firmware images" for the manual end-to-end run.
 set -eu
 if [ "${1:-}" = "--version" ]; then echo "fake-unblob 0.0.1"; exit 0; fi
+if [ "${1:-}" = "--help" ]; then exit 0; fi
 dir=
 image=
 while [ "$#" -gt 0 ]; do

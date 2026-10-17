@@ -23,10 +23,12 @@ import (
 // helper tools that this repository does not provision.
 const fakeExtractorScript = `#!/bin/sh
 if [ "$1" = --version ]; then echo "fake-unblob 9.8.7"; exit 0; fi
+if [ "$1" = --help ]; then exit 0; fi
 while [ $# -gt 0 ]; do
   case "$1" in --extract-dir) dir=$2; shift ;; esac
   shift
 done
+[ -n "$dir" ] || exit 2
 base="$dir/image.bin_extract"
 mkdir -p "$base/0-4096.unknown" "$base/4096-9000.squashfs_extract/etc" "$base/4096-9000.squashfs_extract/bin" "$base/9000-9100.zip_extract"
 echo ID=debian > "$base/4096-9000.squashfs_extract/etc/os-release"
@@ -187,7 +189,7 @@ func TestFirmwareImageExtractorErrorsWithPartialOutputAreRecorded(t *testing.T) 
 }
 
 func TestFirmwareImageWithoutRootFilesystemFailsAndListsEntries(t *testing.T) {
-	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 1.0.0; exit 0; fi\nwhile [ $# -gt 0 ]; do case \"$1\" in --extract-dir) d=$2; shift;; esac; shift; done\nmkdir -p \"$d/x_extract/0-10.gzip_extract\" \"$d/x_extract/boot\"\necho a > \"$d/x_extract/loader.bin\"\n"
+	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 1.0.0; exit 0; fi\nif [ \"$1\" = --help ]; then exit 0; fi\nwhile [ $# -gt 0 ]; do case \"$1\" in --extract-dir) d=$2; shift;; esac; shift; done\nmkdir -p \"$d/x_extract/0-10.gzip_extract\" \"$d/x_extract/boot\"\necho a > \"$d/x_extract/loader.bin\"\n"
 	f := newFirmwareFixture(t, script, "unblob")
 	called := false
 	runner := func(context.Context, string, string, string) ([]byte, error) { called = true; return nil, nil }
@@ -209,7 +211,7 @@ func TestFirmwareImageWithoutRootFilesystemFailsAndListsEntries(t *testing.T) {
 }
 
 func TestFirmwareImageExtractorProducingNothingFails(t *testing.T) {
-	f := newFirmwareFixture(t, "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 1.0.0; exit 0; fi\nexit 1\n", "unblob")
+	f := newFirmwareFixture(t, "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 1.0.0; exit 0; fi\nif [ \"$1\" = --help ]; then exit 0; fi\nexit 1\n", "unblob")
 	err := runCLI(context.Background(), f.args, &bytes.Buffer{}, successRunner, fixedNow)
 	if err == nil || !strings.Contains(err.Error(), "produced no output") {
 		t.Fatalf("unexpected result: %v", err)
@@ -425,6 +427,7 @@ func TestFirmwareImageUsesRootfsScanPolicyDigest(t *testing.T) {
 // log, and exit status 0 even when something failed.
 const fakeBinwalkScript = `#!/bin/sh
 if [ "$1" = --version ]; then echo "binwalk 3.1.0"; exit 0; fi
+if [ "$1" = --help ]; then exit 0; fi
 for a in "$@"; do image=$a; done
 while [ $# -gt 0 ]; do
   case "$1" in --directory) dir=$2; shift ;; --log) log=$2; shift ;; esac
@@ -509,7 +512,7 @@ func TestBinwalkLogShowsFailure(t *testing.T) {
 }
 
 func TestFirmwareImageNoRootWithBinwalkLayoutListsInnerEntries(t *testing.T) {
-	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 3.1.0; exit 0; fi\nfor a in \"$@\"; do image=$a; done\nwhile [ $# -gt 0 ]; do case \"$1\" in --directory) d=$2; shift;; esac; shift; done\nn=$(basename \"$image\")\nmkdir -p \"$d/$n.extracted/0\"\nln -s \"$image\" \"$d/$n\"\n"
+	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 3.1.0; exit 0; fi\nif [ \"$1\" = --help ]; then exit 0; fi\nfor a in \"$@\"; do image=$a; done\nwhile [ $# -gt 0 ]; do case \"$1\" in --directory) d=$2; shift;; esac; shift; done\nn=$(basename \"$image\")\nmkdir -p \"$d/$n.extracted/0\"\nln -s \"$image\" \"$d/$n\"\n"
 	f := newFirmwareFixture(t, script, "binwalk")
 	err := runCLI(context.Background(), f.args, &bytes.Buffer{}, successRunner, fixedNow)
 	if err == nil || !strings.Contains(err.Error(), "0/") || strings.Contains(err.Error(), "device-1.2.3.bin,") || !strings.Contains(err.Error(), "binwalk --list") {

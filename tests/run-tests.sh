@@ -25,15 +25,21 @@ cd "$TOOL_DIR"
 "$GO" test ./...
 "$GO" build -trimpath -o "$CRACKEN_SBOM_TEST_OUTPUT/cracken-sbom" .
 "$PYTHON" "$TOOL_DIR/tests/make-archives.py" "$TOOL_DIR/fixtures/rootfs" "$CRACKEN_SBOM_TEST_OUTPUT/archives"
-for target in rootfs npm python docker-archive oci-archive; do
+# Synthetic firmware image: opaque bytes unpacked by tests/fake-extractor.sh.
+head -c 4096 /dev/zero > "$CRACKEN_SBOM_TEST_OUTPUT/archives/image.bin"
+for target in rootfs npm python docker-archive oci-archive firmware-image; do
+  extra=()
   case "$target" in
     docker-archive) fixture="$CRACKEN_SBOM_TEST_OUTPUT/archives/docker.tar" ;;
     oci-archive) fixture="$CRACKEN_SBOM_TEST_OUTPUT/archives/oci.tar" ;;
+    firmware-image)
+      fixture="$CRACKEN_SBOM_TEST_OUTPUT/archives/image.bin"
+      extra=(--extractor "$TOOL_DIR/tests/fake-extractor.sh" --extractor-kind unblob) ;;
     *) fixture="$TOOL_DIR/fixtures/$target" ;;
   esac
   "$CRACKEN_SBOM_TEST_OUTPUT/cracken-sbom" generate --target-type "$target" \
     --target "$fixture" --target-id "fixture-$target" --syft "$SYFT" \
-    --output "$CRACKEN_SBOM_TEST_OUTPUT/$target"
+    --output "$CRACKEN_SBOM_TEST_OUTPUT/$target" ${extra[@]+"${extra[@]}"}
 done
 "$PYTHON" "$TOOL_DIR/tests/license_choices_test.py" \
   "$CRACKEN_SBOM_TEST_OUTPUT/cracken-sbom" "$SYFT" "$TOOL_DIR/tests/schema"

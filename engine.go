@@ -73,7 +73,7 @@ const maxEngineOutput = 64 << 20
 // omitted; asserted target identity is recorded separately in provenance.
 func configurationDigest(targetType string) string {
 	source := targetType
-	if source == "rootfs" || source == "npm" || source == "python" {
+	if source == "rootfs" || source == "npm" || source == "python" || source == firmwareTargetType {
 		source = "dir"
 	}
 	policy := struct {

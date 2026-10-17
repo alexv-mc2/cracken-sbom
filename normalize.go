@@ -555,9 +555,23 @@ func normalizeSBOM(input []byte, ctx ProvenanceContext) ([]byte, Quality, error)
 	if unresolved {
 		quality.Warnings = append(quality.Warnings, "Unresolved or removed dependency references were omitted; graph coverage is incomplete.")
 	}
+	if ctx.Firmware != nil {
+		quality.Warnings = append(quality.Warnings, "The inventory was derived from a best-effort extraction of a firmware image. Encrypted, unrecognized or unsupported content, and statically linked or stripped code, may be absent. The inventory does not prove completeness.")
+		if ctx.Firmware.ExtractorReported {
+			quality.Warnings = append(quality.Warnings, "The extractor reported errors; parts of the image may not have been extracted.")
+		}
+		if n := ctx.Firmware.OtherRootTotal; n > 0 {
+			quality.Warnings = append(quality.Warnings, fmt.Sprintf("%d further root filesystem candidate(s) were extracted but not scanned; only the largest was inventoried.", n))
+		}
+	}
 	properties := []any{}
 	for _, p := range [][2]string{{"cracken:generator", "cracken-sbom"}, {"cracken:generator:version", ctx.ToolVersion}, {"cracken:engine", "syft"}, {"cracken:engine:version", ctx.EngineVersion}, {"cracken:configuration:sha256", ctx.ConfigDigest}, {"cracken:target:type", ctx.TargetType}, {"cracken:target:identifier", ctx.TargetIdentifier}, {"cracken:privacy:profile", privacyProfile}, {"cracken:provenance:status", "customer_asserted_local"}} {
 		properties = append(properties, map[string]string{"name": p[0], "value": p[1]})
+	}
+	if ctx.Firmware != nil {
+		for _, p := range firmwareProperties(ctx.Firmware) {
+			properties = append(properties, map[string]string{"name": p[0], "value": p[1]})
+		}
 	}
 	out := map[string]any{"bomFormat": "CycloneDX", "specVersion": "1.5", "version": 1, "components": components,
 		"metadata": map[string]any{"timestamp": ctx.GeneratedAt, "tools": []any{map[string]string{"name": "cracken-sbom", "version": ctx.ToolVersion}, map[string]string{"name": "syft", "version": ctx.EngineVersion}}, "properties": properties}}

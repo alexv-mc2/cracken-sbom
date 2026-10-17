@@ -129,7 +129,25 @@ def main():
         raise AssertionError("absolute dpkg-status symlink changed the exact rootfs component inventory")
     if "cracken-fixture-host-package-canary" in {c.get("name") for c in escaped.get("components", [])}:
         raise AssertionError("external host package canary escaped the rootfs boundary")
-    print("PASS actual Syft rootfs absolute-symlink boundary; CLI canary detected and excluded")
+    # The same tree delivered as a firmware image must keep the same boundary:
+    # the fake extractor copies it (symlink included) into the extraction folder.
+    extractor = fixtures.parent / "tests" / "fake-extractor.sh"
+    image = work / "image.bin"
+    image.write_bytes(b"\0" * 4096)
+    Path(str(image) + ".source-tree").write_text(str(escape_rootfs))
+    firmware_output = work / "output-firmware-image"
+    run(
+        [str(cracken), "generate", "--target-type", "firmware-image", "--target", str(image),
+         "--target-id", "fixture-firmware-symlink", "--syft", str(syft),
+         "--extractor", str(extractor), "--extractor-kind", "unblob", "--output", str(firmware_output)],
+        env,
+    )
+    firmware = json.loads((firmware_output / "sbom.cdx.json").read_text())
+    if component_identities(firmware) != component_identities(baseline):
+        raise AssertionError("absolute dpkg-status symlink changed the firmware-image component inventory")
+    if "cracken-fixture-host-package-canary" in {c.get("name") for c in firmware.get("components", [])}:
+        raise AssertionError("external host package canary escaped the extracted firmware root")
+    print("PASS actual Syft rootfs absolute-symlink boundary; CLI canary detected and excluded (rootfs and firmware-image)")
 
 
 if __name__ == "__main__":

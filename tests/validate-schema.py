@@ -27,7 +27,7 @@ schema = json.loads((folder/'bom-1.5.schema.json').read_text())
 validator = Draft7Validator(schema, registry=registry)
 assert not validator.is_valid({'bomFormat':'CycloneDX', 'specVersion':'1.5', 'version':1,
                                'components':[{'type':'library'}]}), 'Validator must reject missing name'
-for target in ['rootfs', 'npm', 'python', 'docker-archive', 'oci-archive']:
+for target in ['rootfs', 'npm', 'python', 'docker-archive', 'oci-archive', 'firmware-image']:
     document = json.loads((Path(sys.argv[1])/target/'sbom.cdx.json').read_text())
     errors = sorted(validator.iter_errors(document), key=lambda e: str(list(e.path)))
     if errors:

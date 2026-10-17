@@ -15,13 +15,18 @@ import (
 	"time"
 )
 
+const usage = "invalid flags; use generate --target-type TYPE --target PATH --target-id ID --output NEW-DIR --syft ABSOLUTE-BINARY [--allow-incomplete] [--extractor ABSOLUTE-BINARY [--extractor-kind unblob|binwalk]]"
+
 // Release builds bind this value to their exact tag with -ldflags -X.
 var toolVersion = "0.1.0"
+
 const maxUploadBytes = 10 << 20
 
 type generateOptions struct {
 	targetType, target, targetID, output, syft string
 	allowIncomplete                            bool
+	// Firmware images only: the extractor as given and as resolved, and its kind.
+	extractor, extractorGiven, extractorKind string
 }
 
 func main() {
@@ -47,16 +52,26 @@ func parseOptions(args []string) (generateOptions, error) {
 	fs.StringVar(&o.output, "output", "", "new output directory")
 	fs.StringVar(&o.syft, "syft", "", "absolute path to verified Syft binary")
 	fs.BoolVar(&o.allowIncomplete, "allow-incomplete", false, "acknowledge incomplete metadata")
+	fs.StringVar(&o.extractor, "extractor", "", "absolute path to unblob or binwalk (firmware-image only)")
+	fs.StringVar(&o.extractorKind, "extractor-kind", "", "unblob or binwalk (firmware-image only)")
 	if fs.Parse(args) != nil || fs.NArg() != 0 {
-		return o, errors.New("invalid flags; use generate --target-type TYPE --target PATH --target-id ID --output NEW-DIR --syft ABSOLUTE-BINARY [--allow-incomplete]")
+		return o, errors.New(usage)
 	}
 	if o.target == "" || o.targetID == "" || o.output == "" || !filepath.IsAbs(o.syft) {
 		return o, errors.New("required flags are missing or engine path is not absolute")
 	}
 	switch o.targetType {
 	case "rootfs", "npm", "python", "oci-archive", "docker-archive":
+		if o.extractor != "" || o.extractorKind != "" {
+			return o, errors.New("--extractor and --extractor-kind are only valid with --target-type firmware-image")
+		}
+	case firmwareTargetType:
+		if !filepath.IsAbs(o.extractor) {
+			return o, errors.New("firmware-image requires --extractor with an absolute path to unblob or binwalk")
+		}
+		o.extractorGiven = o.extractor
 	default:
-		return o, errors.New("target type must be rootfs, npm, python, oci-archive or docker-archive")
+		return o, errors.New("target type must be rootfs, npm, python, oci-archive, docker-archive or firmware-image")
 	}
 	return o, nil
 }
@@ -116,6 +131,19 @@ func validatePaths(o *generateOptions) error {
 	if wantDir && err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return errors.New("output directory must be outside the scanned target")
 	}
+	if o.targetType == firmwareTargetType {
+		// Package managers such as pipx expose the extractor through a symbolic
+		// link, so the link is resolved here instead of being rejected.
+		extractor, err := filepath.EvalSymlinks(o.extractor)
+		if err != nil {
+			return errors.New("cannot resolve the extractor")
+		}
+		extractorInfo, err := os.Stat(extractor)
+		if err != nil || !extractorInfo.Mode().IsRegular() || extractorInfo.Mode()&0111 == 0 {
+			return errors.New("extractor must be an existing regular executable")
+		}
+		o.extractor = extractor
+	}
 	o.target, o.syft, o.output = target, engine, out
 	return nil
 }
@@ -129,7 +157,7 @@ func runCLI(ctx context.Context, args []string, stdout io.Writer, runner engineR
 		return err
 	}
 	if len(args) == 0 || args[0] != "generate" {
-		return errors.New("use version or generate --target-type TYPE --target PATH --target-id ID --output NEW-DIR --syft ABSOLUTE-BINARY [--allow-incomplete]")
+		return errors.New("use version or " + strings.TrimPrefix(usage, "invalid flags; use "))
 	}
 	o, err := parseOptions(args[1:])
 	if err != nil {
@@ -147,7 +175,18 @@ func runCLI(ctx context.Context, args []string, stdout io.Writer, runner engineR
 	if _, err := createProvenance([]byte("{}"), provenanceCtx, Quality{}); err != nil {
 		return errors.New("target identifier or provenance metadata is invalid")
 	}
-	raw, err := runner(ctx, o.syft, o.target, o.targetType)
+	scanTarget, scanType := o.target, o.targetType
+	if o.targetType == firmwareTargetType {
+		root, firmware, cleanup, err := extractFirmware(ctx, o, now)
+		defer cleanup()
+		if err != nil {
+			return err
+		}
+		// The extracted tree goes through the unchanged rootfs flow.
+		provenanceCtx.Firmware = firmware
+		scanTarget, scanType = root, "rootfs"
+	}
+	raw, err := runner(ctx, o.syft, scanTarget, scanType)
 	if err != nil {
 		return err
 	}
@@ -179,6 +218,9 @@ func runCLI(ctx context.Context, args []string, stdout io.Writer, runner engineR
 		return err
 	}
 	_, _ = fmt.Fprintln(stdout, "Generated sbom.cdx.json, provenance.json and quality.json. Review the SBOM before manual upload; provenance remains customer-held.")
+	if o.targetType == firmwareTargetType {
+		_, _ = fmt.Fprintln(stdout, "The inventory comes from a best-effort local extraction of the image; see the firmware block in provenance.json and the warnings in quality.json.")
+	}
 	return nil
 }
 

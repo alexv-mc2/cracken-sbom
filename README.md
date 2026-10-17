@@ -153,6 +153,12 @@ the unblob installation guide; a missing helper means that format is not
 unpacked. On macOS also run `brew install libmagic`. Windows users work inside
 WSL 2 as described above.
 
+The command was tested with unblob 26.6.4 and binwalk 3.1.0; older releases
+were not tested. The generator passes only options that the installed unblob
+lists in its `--help` (for unblob it turns off randomness analysis when the
+version has that option), so differences in optional flags between releases do
+not cause usage errors.
+
 Then run the generator. `--extractor` is an absolute path (the link that pipx
 creates is fine), and the output directory must be new:
 
@@ -183,9 +189,12 @@ the default is unchanged.
 What happens, in order:
 
 1. The generator computes the SHA-256 of the image and runs the extractor with
-   `--version`. If the image file is replaced or modified while the extractor
-   works, the run stops with an error instead of recording a digest of other
-   bytes.
+   `--version`. After the extraction the generator checks that the image file is
+   still the same file with the same size, modification time and first and last
+   MiB, and that the extractor file is unchanged; otherwise the run stops with an
+   error. This does not detect an in-place rewrite of the middle of a large image
+   that keeps its size and modification time, because the image is not copied. Do
+   not change the image while the command runs.
 2. The extractor unpacks the image into the private folder (for unblob:
    `unblob --extract-dir DIR firmware.bin`; for binwalk: `binwalk --extract
    --matryoshka --quiet --log LOG --directory DIR firmware.bin`).

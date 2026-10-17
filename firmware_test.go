@@ -663,3 +663,88 @@ func processRuns(pid int) bool {
 	state := strings.TrimSpace(string(out))
 	return state != "" && !strings.HasPrefix(state, "Z")
 }
+
+func TestSelectUnblobOptions(t *testing.T) {
+	for _, c := range []struct {
+		name, help string
+		want       string
+	}{
+		{"current", "  -n, --randomness-depth INTEGER RANGE\n  --report PATH", "--randomness-depth 0"},
+		{"older", "  -n, --entropy-depth INTEGER\n  --report PATH", "--entropy-depth 0"},
+		{"neither", "  --extract-dir DIRECTORY", ""},
+		{"empty", "", ""},
+	} {
+		if got := strings.Join(selectUnblobOptions(c.help), " "); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// A fake unblob that rejects unknown flags like a real usage error would.
+func TestFirmwareImageUnblobNeverPassesFlagsItDoesNotList(t *testing.T) {
+	script := `#!/bin/sh
+case "$1" in
+  --version) echo 1.0.0; exit 0 ;;
+  --help) echo "  -e, --extract-dir DIRECTORY"; exit 0 ;;
+esac
+for a in "$@"; do
+  case "$a" in --randomness-depth|--entropy-depth|--log) echo "usage error" >&2; exit 2 ;; esac
+done
+while [ $# -gt 0 ]; do case "$1" in --extract-dir) d=$2; shift ;; esac; shift; done
+mkdir -p "$d/x/etc" "$d/x/bin"; echo a > "$d/x/etc/a"; echo b > "$d/x/bin/b"
+`
+	f := newFirmwareFixture(t, script, "unblob")
+	if err := runCLI(context.Background(), f.args, &bytes.Buffer{}, successRunner, fixedNow); err != nil {
+		t.Fatal(err)
+	}
+	provenance, _ := os.ReadFile(filepath.Join(f.output, "provenance.json"))
+	if !bytes.Contains(provenance, []byte(`"extractor_reported_errors": false`)) {
+		t.Fatal("extractor was called with unsupported flags")
+	}
+}
+
+func TestEdgeDigestCoversFirstAndLastMiB(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "big.bin")
+	data := make([]byte, 5<<20)
+	if os.WriteFile(path, data, 0600) != nil {
+		t.Fatal("write")
+	}
+	base, _ := edgeDigest(path)
+	for _, offset := range []int{0, len(data) - 1} {
+		changed := append([]byte{}, data...)
+		changed[offset] = 1
+		_ = os.WriteFile(path, changed, 0600)
+		if got, _ := edgeDigest(path); got == base {
+			t.Errorf("change at %d not detected", offset)
+		}
+	}
+	changed := append([]byte{}, data...)
+	changed[len(data)/2] = 1
+	_ = os.WriteFile(path, changed, 0600)
+	if got, _ := edgeDigest(path); got != base {
+		t.Error("documented limit changed: middle rewrite is not covered")
+	}
+	// A file between 1 and 2 MiB is covered completely.
+	small := make([]byte, 1500000)
+	_ = os.WriteFile(path, small, 0600)
+	base, _ = edgeDigest(path)
+	small[1400000] = 1
+	_ = os.WriteFile(path, small, 0600)
+	if got, _ := edgeDigest(path); got == base {
+		t.Error("change in a 1.5 MB file not detected")
+	}
+}
+
+func TestFirmwareImageChangedExtractorFails(t *testing.T) {
+	// The fake extractor appends to itself while "extracting".
+	script := strings.Replace(fakeExtractorScript, "%s", "echo '# changed' >> \"$0\"", 1)
+	f := newFirmwareFixture(t, script, "unblob")
+	err := runCLI(context.Background(), f.args, &bytes.Buffer{}, successRunner, fixedNow)
+	if err == nil || !strings.Contains(err.Error(), "extractor file changed") {
+		t.Fatalf("modified extractor accepted: %v", err)
+	}
+	if _, statErr := os.Stat(f.output); !os.IsNotExist(statErr) || stagingLeft(f.dir) {
+		t.Fatal("failure left output or workspace")
+	}
+}

@@ -159,6 +159,36 @@ func hashFile(path string) (string, int64, error) {
 	return hex.EncodeToString(h.Sum(nil)), n, nil
 }
 
+// edgeDigest hashes the first and last MiB of a file (all of it when smaller).
+// It is a cheap second witness next to size, modification time and identity for
+// "was this file rewritten while it was processed".
+func edgeDigest(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return "", err
+	}
+	const edge = 1 << 20
+	h := sha256.New()
+	if _, err := io.Copy(h, io.NewSectionReader(f, 0, edge)); err != nil {
+		return "", err
+	}
+	if info.Size() > 2*edge {
+		if _, err := io.Copy(h, io.NewSectionReader(f, info.Size()-edge, edge)); err != nil {
+			return "", err
+		}
+	} else if info.Size() > edge {
+		if _, err := io.Copy(h, io.NewSectionReader(f, edge, info.Size()-edge)); err != nil {
+			return "", err
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
 // Extractors need the user's PATH to find helpers such as 7z, and on macOS the
 // library path to find libmagic. The rest of the environment is replaced. The
 // proxy variables are a courtesy to well-behaved tools, not a sandbox: the
@@ -231,8 +261,10 @@ func runExtractor(ctx context.Context, kind, binary, image, extractDir, work str
 	binwalkLog := filepath.Join(work, "binwalk.json")
 	switch kind {
 	case "unblob":
-		// Randomness analysis only draws entropy charts; it is not needed here.
-		args = []string{"--extract-dir", extractDir, "--log", filepath.Join(work, "unblob.log"), "--randomness-depth", "0", image}
+		// unblob writes its log to unblob.log in the working directory, which is
+		// the private work folder. The optional speed-up depends on the version.
+		args = append([]string{"--extract-dir", extractDir}, unblobOptionalArgs(ctx, binary, work)...)
+		args = append(args, image)
 	case "binwalk":
 		// -M descends into extracted containers; without it a squashfs inside
 		// an update wrapper would stay packed.
@@ -264,6 +296,31 @@ func runExtractor(ctx context.Context, kind, binary, image, extractDir, work str
 		return reportedErrors, errors.New("firmware extraction failed and produced no output; " + helperHint(kind))
 	}
 	return reportedErrors, nil
+}
+
+// unblobOptionalArgs turns off randomness analysis, which only produces entropy
+// statistics we do not use, when this unblob version offers the option. The flag
+// is --randomness-depth in current releases and was --entropy-depth before; if
+// neither is listed (or --help fails) nothing is passed, which is always correct.
+func unblobOptionalArgs(ctx context.Context, binary, work string) []string {
+	hctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	cmd := extractorCommand(hctx, binary, work, "--help")
+	out := &cappedBuffer{limit: 256 << 10}
+	cmd.Stdout, cmd.Stderr = out, out
+	if runGrouped(cmd) != nil || out.overflow {
+		return nil
+	}
+	return selectUnblobOptions(out.String())
+}
+
+func selectUnblobOptions(help string) []string {
+	for _, flag := range []string{"--randomness-depth", "--entropy-depth"} {
+		if strings.Contains(help, flag) {
+			return []string{flag, "0"}
+		}
+	}
+	return nil
 }
 
 func helperHint(kind string) string {
@@ -542,6 +599,11 @@ func extractFirmware(ctx context.Context, o generateOptions, now func() time.Tim
 		err = errors.New("cannot read the firmware image")
 		return
 	}
+	imageEdges, err := edgeDigest(o.target)
+	if err != nil {
+		err = errors.New("cannot read the firmware image")
+		return
+	}
 	if err = contextError(ctx); err != nil {
 		return
 	}
@@ -565,18 +627,36 @@ func extractFirmware(ctx context.Context, o generateOptions, now func() time.Tim
 		err = errors.New("cannot prepare extraction workspace")
 		return
 	}
+	// The extractor entry file is hashed once and executed in place, so a change
+	// is detected after it has been used, not prevented.
+	extractorChanged := func() bool {
+		again, _, herr := hashFile(o.extractor)
+		return herr != nil || again != extractorHash
+	}
 	version, err := extractorVersion(ctx, o.extractor, work)
 	if err != nil {
+		return
+	}
+	if extractorChanged() {
+		err = errors.New("the extractor file changed after it was hashed; run again")
 		return
 	}
 	reportedErrors, err := runExtractor(ctx, kind, o.extractor, o.target, extractDir, work)
 	if err != nil {
 		return
 	}
-	// The extractor opens the image by name. If the file was replaced or changed
-	// since it was hashed, the recorded digest would describe other bytes.
-	if after, serr := os.Stat(o.target); serr != nil || !os.SameFile(imageBefore, after) || after.Size() != imageSize || !after.ModTime().Equal(imageBefore.ModTime()) {
+	// The extractor opens the image by name, not by the descriptor that was
+	// hashed. Detected afterwards: replacement of the file (identity), a changed
+	// size or modification time, and a changed first or last MiB. Not detected: an
+	// in-place rewrite of the middle of a large file that keeps size and
+	// modification time. The image is not copied, to spare disk space.
+	edgesAfter, edgeErr := edgeDigest(o.target)
+	if after, serr := os.Stat(o.target); serr != nil || edgeErr != nil || !os.SameFile(imageBefore, after) || after.Size() != imageSize || !after.ModTime().Equal(imageBefore.ModTime()) || edgesAfter != imageEdges {
 		err = errors.New("the firmware image changed while it was being processed; wait until it is complete and run again")
+		return
+	}
+	if extractorChanged() {
+		err = errors.New("the extractor file changed while it was running; run again")
 		return
 	}
 	extractedAt := now().UTC().Format(time.RFC3339)

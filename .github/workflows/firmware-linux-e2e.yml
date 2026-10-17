@@ -69,6 +69,12 @@ jobs:
             "$RUNNER_TEMP/sasquatch.deb"
           "$RUNNER_TEMP/unblob-venv/bin/unblob" --version
           "$RUNNER_TEMP/unblob-venv/bin/unblob" --show-external-dependencies || true
+      - name: Build binwalk 3.1.0 from the locked crates.io release
+        run: |
+          set -euo pipefail
+          # --locked uses the dependency versions and checksums shipped in the crate.
+          cargo install binwalk --version 3.1.0 --locked --root "$RUNNER_TEMP/binwalk"
+          "$RUNNER_TEMP/binwalk/bin/binwalk" --version
       - name: Provision verification tools and authenticated engine
         run: |
           set -euo pipefail
@@ -84,6 +90,7 @@ jobs:
           set -euo pipefail
           GENERATOR="$RUNNER_TEMP/cracken-sbom" SYFT="$RUNNER_TEMP/syft" \
             UNBLOB="$RUNNER_TEMP/unblob-venv/bin/unblob" \
+            BINWALK="$RUNNER_TEMP/binwalk/bin/binwalk" \
             IMAGE="$RUNNER_TEMP/image/openwrt.bin" IMAGE_SHA256="$IMAGE_SHA256" \
             OUTPUT_ROOT="$RUNNER_TEMP/e2e-output" \
             bash tests/firmware_e2e_linux.sh

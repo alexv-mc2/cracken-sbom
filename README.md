@@ -1,7 +1,8 @@
 # cracken-sbom
 
 Generate a software inventory locally from package metadata and image archives.
-The primary use case is an unpacked firmware root filesystem. The tool wraps
+The primary use case is an unpacked firmware root filesystem; a binary firmware
+image can be unpacked locally first (see [Firmware images](#firmware-images)). The tool wraps
 unmodified Syft v1.54.0 and writes minimized CycloneDX JSON 1.5 with local
 provenance and quality sidecars.
 
@@ -116,11 +117,94 @@ Other local targets use the same command with these arguments:
 | `docker-archive` | Local archive exported with existing build tooling | No registry pull or Docker socket |
 | `oci-archive` | Local OCI image archive | No registry pull |
 | `rootfs` | Unpacked filesystem root with package metadata | Preferred firmware artifact scenario |
+| `firmware-image` | Binary firmware image file (needs `--extractor`) | Unpacked locally first; see [Firmware images](#firmware-images) |
 
 For [Yocto Project](https://www.yoctoproject.org/) builds, use the native SPDX
 output from the build. The [Yocto guide](docs/YOCTO.md) explains how to enable
 it, where each release puts the files and how to prepare a ZIP for upload.
 This tool does not provide a Yocto adapter or conversion.
+
+## Firmware images
+
+Sometimes a contractor hands over only a binary image (`firmware.bin`) and no
+build inventory. With `--target-type firmware-image` the generator unpacks the
+image on your computer with an open-source extractor, picks the root filesystem
+it finds, and then runs exactly the same steps as for a `rootfs` target. The
+image is never uploaded and the generator never contacts a network.
+
+The extractor is a separate program that you install and name yourself, in the
+same way as Syft. Two are supported: [unblob](https://github.com/onekey-sec/unblob)
+(preferred) and [binwalk](https://github.com/ReFirmLabs/binwalk) version 3. Both
+are MIT-licensed and run as separate processes; no extractor code is linked into
+the generator.
+
+Install unblob with [pipx](https://pipx.pypa.io/):
+
+```sh
+pipx install unblob
+unblob --show-external-dependencies
+```
+
+The second command lists the helper tools unblob needs for each image format
+(for example 7z, lz4, zstd, and `sasquatch` for SquashFS). Install the ones for
+the formats in your image with your system package manager or as described in
+the unblob installation guide; a missing helper means that format is not
+unpacked. On macOS also run `brew install libmagic`. Windows users work inside
+WSL 2 as described above.
+
+Then run the generator. `--extractor` is an absolute path (the link that pipx
+creates is fine), and the output directory must be new:
+
+```sh
+./cracken-sbom generate \
+  --target-type firmware-image --target /work/firmware/firmware.bin \
+  --target-id firmware-2026.10.17 \
+  --syft /opt/verified-tools/syft \
+  --extractor "$HOME/.local/bin/unblob" \
+  --output /work/evidence/firmware-2026.10.17
+```
+
+The extractor kind is read from the file name (`unblob` or `binwalk`). For any
+other name add `--extractor-kind unblob` or `--extractor-kind binwalk`.
+Extraction can take a long time and needs free disk space of several times the
+image size. It happens in a private folder created next to the output
+directory, which is deleted when the command ends, also after an error or
+Ctrl-C.
+
+What happens, in order:
+
+1. The generator computes the SHA-256 of the image and runs the extractor with
+   `--version`.
+2. The extractor unpacks the image into the private folder (for unblob:
+   `unblob --extract-dir DIR firmware.bin`; for binwalk: `binwalk --extract
+   --matryoshka --directory DIR firmware.bin`).
+3. The generator looks for the root filesystem: a folder that has `etc` and at
+   least one of `bin`, `sbin`, `lib`, `usr`, or at least three of them, or that
+   holds a package database. If several are found, the one with the most files is
+   scanned and the others are listed. If none is found, the command stops and
+   lists what was extracted, so you can unpack it yourself and use `rootfs`.
+4. Syft scans the chosen folder with the same settings as for `rootfs`.
+
+The `firmware` block in `provenance.json` records the image file name (without
+its folder), size and SHA-256, the extractor kind, version and the SHA-256 of its
+executable, the extraction time, the chosen root folder (relative to the
+extraction folder), the number of extracted files, the entries extracted next to
+the chosen root that were not scanned, and whether the extractor reported
+errors. `sbom.cdx.json` carries the main facts as `cracken:firmware:*`
+properties so they travel with the file; it never contains extracted file lists
+or paths of your computer. `quality.json` gets a warning that the inventory came
+from an extracted image.
+
+Extraction is best effort. Encrypted content, formats the extractor does not
+know and formats whose helper tool is missing are not unpacked, so packages
+inside them are missing. Statically linked or stripped programs carry no package metadata, and
+images without a package database (typical for small embedded systems) can give
+a short or empty inventory. Some extractors exit with an error for one chunk of
+an image and still unpack the rest; this is recorded, not hidden. As with every
+target type, the inventory does not establish completeness, absence of
+vulnerabilities or regulatory conformity. A build-time inventory from your build
+system, where one exists, is more accurate than an inventory read back from a
+finished image.
 
 ## What leaves your machine
 
@@ -137,7 +221,7 @@ A successful output directory contains:
 - `sbom.cdx.json`: minimized CycloneDX 1.5 inventory;
 - `provenance.json`: CLI and engine versions, resolved scan-policy digest,
   supplied target identifier, generation time, privacy profile and SHA-256 of
-  the final SBOM;
+  the final SBOM (for firmware images also the `firmware` block described above);
 - `quality.json`: package counts and identified gaps or removals.
 
 Review all three files. Component names, versions, package URLs and licenses
@@ -199,6 +283,10 @@ CRACKEN_SBOM_TEST_OUTPUT=/tmp/cracken-sbom-test-output \
 ```
 
 Tests scan checked-in synthetic metadata and generated local image archives.
+The `firmware-image` test uses `tests/fake-extractor.sh`, a stand-in that
+"unpacks" a dummy image into the rootfs fixture; unblob and binwalk themselves
+are not installed by the suite, so their real behavior is checked by hand with
+the command in [Firmware images](#firmware-images).
 They validate package identities, privacy behavior, output digests and the
 CycloneDX schema. Fixtures do not install packages, pull images or contact a
 database.

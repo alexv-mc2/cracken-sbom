@@ -19,6 +19,8 @@ type ProvenanceContext struct {
 	TargetType       string
 	TargetIdentifier string
 	GeneratedAt      string
+	// Set only for the firmware-image target type.
+	Firmware *FirmwareInfo
 }
 
 type Quality struct {
@@ -46,6 +48,14 @@ func validateContext(ctx ProvenanceContext) (ProvenanceContext, error) {
 	}
 	switch ctx.TargetType {
 	case "npm", "python", "rootfs", "oci-archive", "docker-archive":
+	case firmwareTargetType:
+		if ctx.Firmware != nil {
+			fw, err := validateFirmware(ctx.Firmware)
+			if err != nil {
+				return ctx, err
+			}
+			ctx.Firmware = fw
+		}
 	default:
 		return ctx, errors.New("unsupported target type")
 	}
@@ -81,6 +91,9 @@ func createProvenance(sbom []byte, ctx ProvenanceContext, quality Quality) ([]by
 		"generated_at": ctx.GeneratedAt, "privacy_profile": privacyProfile,
 		"sbom_sha256": sha256Hex(sbom), "quality": quality,
 		"provenance_status": "customer_asserted_local", "timestamp_source": "local_machine_clock",
+	}
+	if ctx.Firmware != nil {
+		result["firmware"] = firmwareProvenance(ctx.Firmware)
 	}
 	out, err := json.MarshalIndent(result, "", "  ")
 	return append(out, '\n'), err

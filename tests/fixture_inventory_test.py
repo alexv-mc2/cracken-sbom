@@ -33,6 +33,7 @@ EXPECTED = {
     "rootfs": EXPECTED_FIRMWARE,
     "docker-archive": EXPECTED_FIRMWARE,
     "oci-archive": EXPECTED_FIRMWARE,
+    "firmware-image": EXPECTED_FIRMWARE,
 }
 
 FORBIDDEN_MARKERS = (
@@ -50,6 +51,22 @@ FORBIDDEN_MARKERS = (
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise AssertionError(message)
+
+
+def check_firmware(folder: Path, sbom_text: str, provenance: dict, quality: dict) -> None:
+    fw = provenance.get("firmware", {})
+    image = (folder.parent / "archives" / "image.bin").read_bytes()
+    require(fw.get("source_type") == "firmware-image", "firmware: wrong source type")
+    require(fw.get("image") == {"file_name": "image.bin", "size_bytes": len(image), "sha256": hashlib.sha256(image).hexdigest()}, "firmware: wrong image facts")
+    require(fw.get("extractor", {}).get("kind") == "unblob" and fw["extractor"].get("version") == "0.0.1", "firmware: wrong extractor facts")
+    require(fw.get("selected_root") == "image.bin_extract/512-4096.squashfs_extract", "firmware: wrong selected root")
+    require(fw.get("unused_entries") == ["image.bin_extract/0-512.unknown"], "firmware: wrong unused entries")
+    require(fw.get("extracted_file_count") == 2 and fw.get("extractor_reported_errors") is False, "firmware: wrong extraction counts")
+    properties = {p["name"]: p["value"] for p in json.loads(sbom_text)["metadata"]["properties"]}
+    require(properties.get("cracken:firmware:image-sha256") == hashlib.sha256(image).hexdigest(), "firmware: SBOM property missing")
+    require(properties.get("cracken:firmware:extractor") == "unblob", "firmware: extractor property missing")
+    require(any("best-effort extraction" in w for w in quality.get("warnings", [])), "firmware: extraction warning missing")
+    require("0-512.unknown" not in sbom_text, "firmware: extracted entry names leaked into the SBOM")
 
 
 def main() -> None:
@@ -91,6 +108,8 @@ def main() -> None:
         require(quality.get("emitted_components") == len(expected), f"{target}: quality count disagrees with inventory")
         require(quality.get("missing_versions") == 0, f"{target}: fixture package version was lost")
         require(provenance.get("quality") == quality, f"{target}: provenance quality sidecar disagrees")
+        if target == "firmware-image":
+            check_firmware(folder, text, provenance, quality)
         print(f"PASS actual Syft fixture inventory: {target}")
 
 

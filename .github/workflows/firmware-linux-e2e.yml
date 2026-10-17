@@ -72,6 +72,7 @@ jobs:
       - name: Build binwalk 3.1.0 from the locked crates.io release
         run: |
           set -euo pipefail
+          sudo apt-get install --no-install-recommends -y build-essential pkg-config libfontconfig1-dev liblzma-dev
           # --locked uses the dependency versions and checksums shipped in the crate.
           cargo install binwalk --version 3.1.0 --locked --root "$RUNNER_TEMP/binwalk"
           "$RUNNER_TEMP/binwalk/bin/binwalk" --version

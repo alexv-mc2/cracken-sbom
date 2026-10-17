@@ -487,6 +487,18 @@ func TestBinwalkLogShowsFailure(t *testing.T) {
 	if binwalkLogShowsFailure(write("ok", `[{"Analysis":{"extractions":{"a":{"success":true}}}}]`)) {
 		t.Error("successful log reported as failure")
 	}
+	// The loose stream binwalk 3.1 writes with --matryoshka.
+	loose := `[
+{"Analysis":{"file_path":"a","file_map":[],"extractions":{"x":{"success":true}}}}
+],
+{"Analysis":{"file_path":"b","file_map":[],"extractions":{}}}
+]`
+	if binwalkLogShowsFailure(write("loose", loose)) {
+		t.Error("real binwalk log shape reported as failure")
+	}
+	if !binwalkLogShowsFailure(write("loose-bad", strings.Replace(loose, `"x":{"success":true}`, `"x":{"success":false}`, 1))) {
+		t.Error("failure in the loose stream not detected")
+	}
 	if !binwalkLogShowsFailure(write("bad", `[{"Analysis":{"extractions":{"a":{"success":true},"b":{"success":false}}}}]`)) {
 		t.Error("failed extraction not detected")
 	}

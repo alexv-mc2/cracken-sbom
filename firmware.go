@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -272,31 +273,39 @@ func helperHint(kind string) string {
 	return "check the extractor installation and its helper tools (unblob --show-external-dependencies lists them)"
 }
 
-// binwalkLogShowsFailure reads binwalk's JSON log. An unreadable log counts as a
-// failure, because success can then not be confirmed.
+// binwalkLogShowsFailure reads binwalk's JSON log. With --matryoshka binwalk
+// 3.1 writes the per-file records as a loose stream ("[{..}],{..}]"), not as one
+// valid array, so the objects are decoded one by one and the separators between
+// them are skipped. An unreadable log counts as a failure, because success can
+// then not be confirmed.
 func binwalkLogShowsFailure(path string) bool {
 	data, err := os.ReadFile(path)
 	if err != nil || len(data) > 64<<20 {
 		return true
 	}
-	var log []struct {
-		Analysis struct {
-			Extractions map[string]struct {
-				Success bool `json:"success"`
-			} `json:"extractions"`
-		} `json:"Analysis"`
-	}
-	if json.Unmarshal(data, &log) != nil {
-		return true
-	}
-	for _, entry := range log {
+	for {
+		data = bytes.TrimLeft(data, " \n\r\t,[]")
+		if len(data) == 0 {
+			return false
+		}
+		var entry struct {
+			Analysis struct {
+				Extractions map[string]struct {
+					Success bool `json:"success"`
+				} `json:"extractions"`
+			} `json:"Analysis"`
+		}
+		dec := json.NewDecoder(bytes.NewReader(data))
+		if dec.Decode(&entry) != nil {
+			return true
+		}
 		for _, e := range entry.Analysis.Extractions {
 			if !e.Success {
 				return true
 			}
 		}
+		data = data[dec.InputOffset():]
 	}
-	return false
 }
 
 // A directory looks like a root filesystem when it has the usual top-level

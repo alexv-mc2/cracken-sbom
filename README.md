@@ -154,7 +154,20 @@ unpacked. On macOS also run `brew install libmagic`. Windows users work inside
 WSL 2 as described above.
 
 The command was tested with unblob 26.6.4 and binwalk 3.1.0; older releases
-were not tested. The generator passes only options that the installed unblob
+were not tested. On Linux, a CI job ([Firmware Linux end-to-end](.github/workflows/firmware-linux-e2e.yml))
+runs the target on every pull request and push to `main` with real unblob 26.6.4
+and real binwalk 3.1.0, using the real `sasquatch` 4.5.1-6 package for SquashFS,
+on the OpenWrt 24.10.8 ath79 Archer C7 v2 image (7 MB, SHA-256 and download URL
+pinned in the workflow). It checks the image digest, the `firmware` block of
+`provenance.json`, the `cracken:firmware:*` properties, that busybox and the
+OpenWrt base packages are in the SBOM, that no path of the runner appears in the
+output, and that no extraction folder is left behind. The same check is
+`tests/firmware_e2e_linux.sh`. On macOS the earlier manual runs used a stand-in
+for `sasquatch`, so the SquashFS path there is tested less. The CI job covers one
+image of one device family; ext4, FIT and vendor-specific formats, other
+extractor releases and larger images (the test image is 7 MB) are not part of it.
+
+The generator passes only options that the installed unblob
 lists in its `--help` (for unblob it turns off randomness analysis when the
 version has that option), so differences in optional flags between releases do
 not cause usage errors.
@@ -325,8 +338,9 @@ CRACKEN_SBOM_TEST_OUTPUT=/tmp/cracken-sbom-test-output \
 Tests scan checked-in synthetic metadata and generated local image archives.
 The `firmware-image` test uses `tests/fake-extractor.sh`, a stand-in that
 "unpacks" a dummy image into the rootfs fixture; unblob and binwalk themselves
-are not installed by the suite, so their real behavior is checked by hand with
-the command in [Firmware images](#firmware-images).
+are not installed by the suite. Their real behavior on Linux is checked by the
+separate CI job and script described in [Firmware images](#firmware-images);
+on other systems check it by hand with the command shown there.
 They validate package identities, privacy behavior, output digests and the
 CycloneDX schema. Fixtures do not install packages, pull images or contact a
 database.

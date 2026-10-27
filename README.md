@@ -10,8 +10,8 @@ The output reflects metadata available to the selected catalogers. Custom
 binaries and software without package metadata may be absent. Some stripped
 or statically linked programs are
 [recognised by version strings](#components-recognised-by-version-strings).
-Scan the shipped artifact and review the quality file. An inventory does not establish completeness, absence
-of vulnerabilities or regulatory conformity.
+Scan the shipped artifact and review the quality file. An inventory does not
+establish completeness, absence of vulnerabilities or regulatory conformity.
 
 ## How it works and why your code stays with you
 
@@ -264,10 +264,11 @@ container without network access.
 ### Components recognised by version strings
 
 Syft's [binary classifiers](https://github.com/anchore/syft/blob/v1.54.0/syft/pkg/cataloger/binary/classifiers.go)
-recognise about 70 known programs from version strings inside binaries.
-Examples include BusyBox, OpenSSL, curl, bash, lighttpd, nginx, Python and
-Node.js. This can work even when a program is stripped or statically linked
-and no package database exists. These components carry
+recognise known programs from version strings inside binaries; the linked
+file lists them. The test suite of this tool checks BusyBox, OpenSSL and curl
+in binaries that carry only a version string and no package database entry
+(`tests/version_string_test.py`). Other programs on the list are recognised
+by Syft and are not separately tested here. These components carry
 `cracken:detection:method=version-string`. The `version_string_components`
 field in `quality.json` counts them. The same count appears in provenance.
 

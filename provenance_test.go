@@ -39,8 +39,8 @@ func TestProvenanceBindsExactFinalBytes(t *testing.T) {
 	}
 }
 
-func TestProvenanceCarriesLicenseCoverageQuality(t *testing.T) {
-	quality := Quality{MissingLicenses: 2, ConvertedLicenseIDs: 1, OmittedLicenseChoices: 3}
+func TestProvenanceCarriesCoverageQuality(t *testing.T) {
+	quality := Quality{VersionStringComponents: 4, MissingLicenses: 2, ConvertedLicenseIDs: 1, OmittedLicenseChoices: 3}
 	p, err := createProvenance([]byte("{}\n"), testContext(), quality)
 	if err != nil {
 		t.Fatal(err)
@@ -51,8 +51,8 @@ func TestProvenanceCarriesLicenseCoverageQuality(t *testing.T) {
 	if err := json.Unmarshal(p, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Quality.MissingLicenses != 2 || got.Quality.ConvertedLicenseIDs != 1 || got.Quality.OmittedLicenseChoices != 3 {
-		t.Fatalf("license coverage quality missing from provenance: %+v", got.Quality)
+	if got.Quality.VersionStringComponents != 4 || got.Quality.MissingLicenses != 2 || got.Quality.ConvertedLicenseIDs != 1 || got.Quality.OmittedLicenseChoices != 3 {
+		t.Fatalf("coverage quality missing from provenance: %+v", got.Quality)
 	}
 }
 

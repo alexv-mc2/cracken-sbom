@@ -437,3 +437,95 @@ func TestNormalizeInventoryAndByteLimits(t *testing.T) {
 		t.Fatalf("byte limit not enforced: %v", err)
 	}
 }
+
+func TestNormalizeVersionStringDetection(t *testing.T) {
+	baseline, _, err := normalizeSBOM(encodeTest(t, testDocument(testPackage("hello"))), testContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name       string
+		properties any
+		marked     bool
+	}{
+		{"absent", nil, false},
+		{"empty", []any{}, false},
+		{"binary classifier", []any{
+			map[string]string{"name": "syft:package:foundBy", "value": "binary-classifier-cataloger"},
+			map[string]string{"name": "syft:location:0:path", "value": "/tmp/private-canary/bin/hello"},
+			map[string]string{"name": "arbitrary", "value": "private-canary"},
+			map[string]string{"name": "syft:package:foundBy", "value": "binary-classifier-cataloger"},
+		}, true},
+		{"dpkg", []any{map[string]string{"name": "syft:package:foundBy", "value": "dpkg-db-cataloger"}}, false},
+		{"elf", []any{map[string]string{"name": "syft:package:foundBy", "value": "elf-binary-package-cataloger"}}, false},
+		{"not exact", []any{map[string]string{"name": "syft:package:foundBy", "value": "binary-classifier-cataloger "}}, false},
+		{"wrong name", []any{map[string]string{"name": "other", "value": "binary-classifier-cataloger"}}, false},
+		{"location only", []any{map[string]string{"name": "syft:location:0:path", "value": "/tmp/private-canary/bin/hello"}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := testPackage("hello")
+			if tc.properties != nil {
+				c["properties"] = tc.properties
+			}
+			out, quality, err := normalizeSBOM(encodeTest(t, testDocument(c)), testContext())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !tc.marked {
+				if string(out) != string(baseline) || quality.VersionStringComponents != 0 {
+					t.Fatalf("unmarked output changed: %s, %+v", out, quality)
+				}
+				return
+			}
+			var got map[string]any
+			if err := json.Unmarshal(out, &got); err != nil {
+				t.Fatal(err)
+			}
+			component := got["components"].([]any)[0].(map[string]any)
+			want := []any{map[string]any{"name": "cracken:detection:method", "value": "version-string"}}
+			if !reflect.DeepEqual(component["properties"], want) || quality.VersionStringComponents != 1 {
+				t.Fatalf("wrong marker or count: %v, %+v", component, quality)
+			}
+			delete(component, "properties")
+			var original map[string]any
+			if err := json.Unmarshal(baseline, &original); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, original) {
+				t.Fatalf("fields other than the marker changed: %s", out)
+			}
+			if strings.Contains(string(out), "syft:") || strings.Contains(string(out), "private-canary") {
+				t.Fatal("input property or location leaked")
+			}
+		})
+	}
+}
+
+func TestNormalizeRejectsMalformedProperties(t *testing.T) {
+	for _, properties := range []any{
+		nil, "private-canary", map[string]any{}, []any{nil}, []any{"private-canary"},
+		[]any{map[string]any{"name": 1, "value": "private-canary"}},
+		[]any{map[string]any{"name": "syft:package:foundBy", "value": 1}},
+		[]any{map[string]any{"name": "syft:package:foundBy"}},
+	} {
+		c := testPackage("hello")
+		c["properties"] = properties
+		out, _, err := normalizeSBOM(encodeTest(t, testDocument(c)), testContext())
+		if err == nil || out != nil || strings.Contains(err.Error(), "private-canary") {
+			t.Fatalf("malformed properties must fail without echoing input: %s, %v", out, err)
+		}
+	}
+}
+
+func TestNormalizeCountsOnlyEmittedVersionStringComponents(t *testing.T) {
+	marked := testPackage("hello")
+	marked["properties"] = []any{map[string]string{"name": "syft:package:foundBy", "value": "binary-classifier-cataloger"}}
+	nested := testPackage("nested")
+	nested["properties"] = marked["properties"]
+	marked["components"] = []any{testPackage("unmarked"), nested}
+	file := map[string]any{"type": "file", "properties": marked["properties"]}
+	_, quality, err := normalizeSBOM(encodeTest(t, testDocument(marked, file)), testContext())
+	if err != nil || quality.VersionStringComponents != 2 || quality.EmittedComponents != 3 || quality.RemovedFiles != 1 {
+		t.Fatalf("wrong emitted version-string count: %+v, %v", quality, err)
+	}
+}

@@ -68,5 +68,8 @@ assert not (output/'empty-output').exists(), 'empty inventory must not publish o
 print('PASS actual Syft empty inventory fails before output publication')
 PY
 "$PYTHON" "$TOOL_DIR/tests/fixture_inventory_test.py"
+"$PYTHON" "$TOOL_DIR/tests/version_string_test.py" \
+  "$CRACKEN_SBOM_TEST_OUTPUT/cracken-sbom" "$SYFT" "$TOOL_DIR/fixtures" \
+  "$CRACKEN_SBOM_TEST_OUTPUT/version-string-tests"
 "$PYTHON" "$TOOL_DIR/tests/validate-schema.py" "$CRACKEN_SBOM_TEST_OUTPUT"
 printf 'PASS tool suite; local evidence: %s\n' "$CRACKEN_SBOM_TEST_OUTPUT"

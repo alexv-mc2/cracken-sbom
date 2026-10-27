@@ -6,10 +6,11 @@ image can be unpacked locally first (see [Firmware images](#firmware-images)). T
 unmodified Syft v1.54.0 and writes minimized CycloneDX JSON 1.5 with local
 provenance and quality sidecars.
 
-The output reflects metadata available to the selected catalogers. Stripped
-images, custom binaries, statically linked code, missing package databases and
-software outside those catalogers may be absent. Scan the shipped artifact and
-review the quality file. An inventory does not establish completeness, absence
+The output reflects metadata available to the selected catalogers. Custom
+binaries and software without package metadata may be absent. Some stripped
+or statically linked programs are
+[recognised by version strings](#components-recognised-by-version-strings).
+Scan the shipped artifact and review the quality file. An inventory does not establish completeness, absence
 of vulnerabilities or regulatory conformity.
 
 ## How it works and why your code stays with you
@@ -241,10 +242,11 @@ from nested archives that are not installed on the device.
 
 Extraction is best effort. Encrypted content, formats the extractor does not
 know and formats whose helper tool is missing are not unpacked, so packages
-inside them are missing. Statically linked or stripped programs carry no package metadata, and
-images without a package database (typical for small embedded systems) can give
-a short or empty inventory. Some extractors exit with an error for one chunk of
-an image and still unpack the rest; this is recorded, not hidden. As with every
+inside them are missing. Stripped or statically linked programs may lack
+package metadata. Some are [recognised by version strings](#components-recognised-by-version-strings),
+but images without a package database can still give a short or empty inventory.
+Some extractors exit with an error for one chunk of an image and still unpack
+the rest; this is recorded, not hidden. As with every
 target type, the inventory does not establish completeness, absence of
 vulnerabilities or regulatory conformity. A build-time inventory from your build
 system, where one exists, is more accurate than an inventory read back from a
@@ -258,6 +260,26 @@ restrictions the generator sets for them (proxy variables pointing at a closed
 port) are a courtesy to well-behaved programs, not a barrier. For an image from a
 supplier you do not trust, run the whole command inside a virtual machine or
 container without network access.
+
+### Components recognised by version strings
+
+Syft's [binary classifiers](https://github.com/anchore/syft/blob/v1.54.0/syft/pkg/cataloger/binary/classifiers.go)
+recognise about 70 known programs from version strings inside binaries.
+Examples include BusyBox, OpenSSL, curl, bash, lighttpd, nginx, Python and
+Node.js. This can work even when a program is stripped or statically linked
+and no package database exists. These components carry
+`cracken:detection:method=version-string`. The `version_string_components`
+field in `quality.json` counts them. The same count appears in provenance.
+
+Nothing is found by these classifiers when the version string has been
+removed, altered or obfuscated. The reported version is the upstream version
+string; backported vendor fixes are not visible. Many components common in
+embedded firmware are not recognised by Syft v1.54.0: zlib, Dropbear, OpenSSH,
+dnsmasq, hostapd, wpa_supplicant, U-Boot, mbedTLS and wolfSSL.
+
+This is not binary code analysis of the kind commercial firmware analysers
+such as ONEKEY and Finite State do. Code compiled into a program without its
+own version string is not found by these classifiers.
 
 ## What leaves your machine
 

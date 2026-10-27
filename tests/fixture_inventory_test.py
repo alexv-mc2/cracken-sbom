@@ -106,6 +106,7 @@ def main() -> None:
                 require(marker not in sidecar_text, f"{target}/{sidecar_name}: local file marker leaked: {marker}")
         quality = json.loads((folder / "quality.json").read_text())
         require(quality.get("emitted_components") == len(expected), f"{target}: quality count disagrees with inventory")
+        require(quality.get("version_string_components") == 0, f"{target}: unexpected version-string component")
         require(quality.get("missing_versions") == 0, f"{target}: fixture package version was lost")
         require(provenance.get("quality") == quality, f"{target}: provenance quality sidecar disagrees")
         if target == "firmware-image":

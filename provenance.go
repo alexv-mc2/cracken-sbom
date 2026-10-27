@@ -24,15 +24,16 @@ type ProvenanceContext struct {
 }
 
 type Quality struct {
-	InputComponents       int      `json:"input_components"`
-	EmittedComponents     int      `json:"emitted_components"`
-	RemovedFiles          int      `json:"removed_files"`
-	MissingVersions       int      `json:"missing_versions"`
-	MissingLicenses       int      `json:"missing_licenses"`
-	ConvertedLicenseIDs   int      `json:"converted_license_ids"`
-	OmittedLicenseChoices int      `json:"omitted_license_choices"`
-	AmbiguousLicenses     int      `json:"ambiguous_licenses"`
-	Warnings              []string `json:"warnings"`
+	InputComponents         int      `json:"input_components"`
+	EmittedComponents       int      `json:"emitted_components"`
+	VersionStringComponents int      `json:"version_string_components"`
+	RemovedFiles            int      `json:"removed_files"`
+	MissingVersions         int      `json:"missing_versions"`
+	MissingLicenses         int      `json:"missing_licenses"`
+	ConvertedLicenseIDs     int      `json:"converted_license_ids"`
+	OmittedLicenseChoices   int      `json:"omitted_license_choices"`
+	AmbiguousLicenses       int      `json:"ambiguous_licenses"`
+	Warnings                []string `json:"warnings"`
 }
 
 var versionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+_-]{0,99}$`)

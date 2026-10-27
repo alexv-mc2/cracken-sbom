@@ -402,6 +402,32 @@ func normalizeComponent(c map[string]any, ref string, quality *Quality) (map[str
 			out["hashes"] = hashes
 		}
 	}
+	if v, exists := c["properties"]; exists {
+		list, ok := v.([]any)
+		if !ok {
+			return nil, errors.New("malformed component properties")
+		}
+		versionString := false
+		for _, v := range list {
+			property, ok := v.(map[string]any)
+			if !ok {
+				return nil, errors.New("malformed component property")
+			}
+			name, nameOK := property["name"].(string)
+			value, valueOK := property["value"].(string)
+			if !nameOK || !valueOK {
+				return nil, errors.New("malformed component property")
+			}
+			if name == "syft:package:foundBy" && value == "binary-classifier-cataloger" {
+				versionString = true
+			}
+		}
+		if versionString {
+			// Synthesize a fixed marker; never copy engine properties or locations.
+			out["properties"] = []any{map[string]string{"name": "cracken:detection:method", "value": "version-string"}}
+			quality.VersionStringComponents++
+		}
+	}
 	return out, nil
 }
 

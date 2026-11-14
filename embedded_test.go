@@ -87,6 +87,114 @@ func TestEmbeddedRules(t *testing.T) {
 	}
 }
 
+func TestEmbeddedStaticLibraries(t *testing.T) {
+	root := t.TempDir()
+	banners := " deflate 1.2.13 Copyright 1995-2022 Jean-loup Gailly and Mark Adler\x00mbed TLS 3.5.1\x00wolfSSL 5.6.6"
+	for _, path := range []string{"usr/sbin/foo", "usr/bin/bar"} {
+		embeddedStub(t, root, path, banners+"\x00"+banners)
+	}
+	limits := embeddedLimits{maxFileBytes: 1 << 20, timeout: time.Second}
+	for _, tc := range []struct {
+		name, raw string
+		want      map[string]int
+	}{
+		{"distinct paths", emptyEmbeddedSBOM, map[string]int{"zlib@1.2.13": 2, "mbedtls@3.5.1": 2, "wolfssl@5.6.6": 2}},
+		{"Syft duplicate", `{"components":[{"name":"zlib","version":"1.2.13","properties":[{"name":"syft:location:0:path","value":"/usr/sbin/foo"}]}]}`, map[string]int{"zlib@1.2.13": 2, "mbedtls@3.5.1": 2, "wolfssl@5.6.6": 2}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, components := embeddedInventory(t, root, []byte(tc.raw), limits)
+			counts := map[string]int{}
+			for _, c := range components {
+				counts[c["name"].(string)+"@"+c["version"].(string)]++
+			}
+			if !reflect.DeepEqual(counts, tc.want) {
+				t.Fatalf("incorrect per-file library inventory: got %v, want %v", counts, tc.want)
+			}
+		})
+	}
+}
+
+func TestEmbeddedLibraryBannerFalsePositives(t *testing.T) {
+	for _, tc := range []struct{ name, path, banner string }{
+		{"zlib fragment", "usr/lib/libz.so", "deflate 1.2"},
+		{"zlib without copyright", "usr/lib/libz.so", "deflate 1.2.13"},
+		{"zlib incomplete copyright", "usr/sbin/foo", "deflate 1.2.13 Copyright 1995-"},
+		{"zlib unrelated copyright", "usr/sbin/foo", "deflate 1.2.13 Copyright 1995-2022 Example Corp"},
+		{"mbedtls prefix", "usr/lib/libmbedtls.so", "notmbed TLS 3.5.1"},
+		{"mbedtls version suffix", "usr/lib/libmbedtls.so", "mbed TLS 3.5.1garbage"},
+		{"mbedtls extra version part", "usr/lib/libmbedtls.so", "mbed TLS 3.5.1.2"},
+		{"wolfssl prefix", "usr/lib/libwolfssl.so", "notwolfSSL 5.6.6"},
+		{"wolfssl version suffix", "usr/lib/libwolfssl.so", "wolfSSL 5.6.6garbage"},
+		{"wolfssl extra version part", "usr/lib/libwolfssl.so", "wolfSSL 5.6.6.2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			embeddedStub(t, root, tc.path, tc.banner)
+			_, components := embeddedInventory(t, root, []byte(emptyEmbeddedSBOM), defaultEmbeddedLimits)
+			if len(components) != 0 {
+				t.Fatalf("fragment produced components: %#v", components)
+			}
+		})
+	}
+}
+
+func TestEmbeddedProgramRulesStillRequireName(t *testing.T) {
+	root := t.TempDir()
+	embeddedStub(t, root, "usr/sbin/foo", "Dropbear sshd v2022.83\x00OpenSSH_9.6p1\x00Dnsmasq version 2.90\x00hostapd v2.10\x00wpa_supplicant v2.10\x00U-Boot 2024.01")
+	_, components := embeddedInventory(t, root, []byte(emptyEmbeddedSBOM), defaultEmbeddedLimits)
+	if len(components) != 0 {
+		t.Fatalf("program rules lost their filename gates: %#v", components)
+	}
+}
+
+func TestEmbeddedRawUBoot(t *testing.T) {
+	const completeBanner = "U-Boot 2024.01 (Jan 01 2024 - 12:34:56 +0000)"
+	for _, tc := range []struct {
+		name, path, banner string
+		maxBytes           int64
+		want               bool
+	}{
+		{"raw named bootloader", "u-boot.bin", completeBanner, 1024, true},
+		{"raw named bootloader short banner", "u-boot-spl.bin", "U-Boot 2024.01", 1024, true},
+		{"boot partition", "boot/loader.bin", "U-Boot 2024.01", 1024, true},
+		{"firmware partition", "partitions/firmware/loader.bin", "U-Boot 2024.01", 1024, true},
+		{"complete banner without path hint", "image.bin", completeBanner, 1024, true},
+		{"complete banner after fragment", "image.bin", "U-Boot 1999.01\x00" + completeBanner, 1024, true},
+		{"complete vendor banner", "image.bin", "U-Boot 2024.01-board (Jan  1 2024 - 12:34:56)", 1024, true},
+		{"random binary", "random.bin", "random binary data", 1024, false},
+		{"path alone", "boot/loader.bin", "random binary data", 1024, false},
+		{"short banner without path hint", "random.bin", "U-Boot 2024.01", 1024, false},
+		{"incomplete date", "random.bin", "U-Boot 2024.01 (Jan 01", 1024, false},
+		{"non-date parenthesis", "random.bin", "U-Boot 2024.01 (documentation)", 1024, false},
+		{"similar directory", "reboot/loader.bin", "U-Boot 2024.01", 1024, false},
+		{"boot text file", "boot/notes.txt", "U-Boot 2024.01", 1024, false},
+		{"raw libraries", "firmware/libraries.bin", " deflate 1.2.13 Copyright 1995-2022 Jean-loup Gailly and Mark Adler\x00mbed TLS 3.5.1\x00wolfSSL 5.6.6", 1024, false},
+		{"oversized named bootloader", "u-boot.bin", completeBanner, 16, false},
+		{"oversized complete banner", "image.bin", completeBanner, 16, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, filepath.FromSlash(tc.path))
+			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("\x00\x01\x02\x03\x00"+tc.banner+"\x00"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			_, components := embeddedInventory(t, root, []byte(emptyEmbeddedSBOM), embeddedLimits{maxFileBytes: tc.maxBytes, timeout: time.Second})
+			if !tc.want {
+				if len(components) != 0 {
+					t.Fatalf("unexpected raw binary components: %#v", components)
+				}
+				return
+			}
+			if len(components) != 1 || components[0]["name"] != "u-boot" || components[0]["version"] != "2024.01" {
+				t.Fatalf("raw U-Boot not recognized: %#v", components)
+			}
+		})
+	}
+}
+
 func TestEmbeddedRootfsDeterministicAndSyftDuplicate(t *testing.T) {
 	root := t.TempDir()
 	// Copy the checked-in rootfs fixture without mutating it.

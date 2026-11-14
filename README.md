@@ -3,7 +3,7 @@
 Generate a software inventory locally from package metadata and image archives.
 The primary use case is an unpacked firmware root filesystem; a binary firmware
 image can be unpacked locally first (see [Firmware images](#firmware-images)). The tool wraps
-unmodified Syft v1.54.0 and writes minimized CycloneDX JSON 1.5 with local
+unmodified Syft v1.55.0 and writes minimized CycloneDX JSON 1.5 with local
 provenance and quality sidecars.
 
 The output reflects metadata available to the selected catalogers. Custom
@@ -113,6 +113,7 @@ Other local targets use the same command with these arguments:
 
 | `--target-type` | Local `--target` | Meaning |
 |---|---|---|
+| `dir` | Source tree containing supported manifests and lock files | Source metadata inventory; does not prove dependencies shipped |
 | `npm` | Directory containing lock/package metadata | Metadata inventory; does not prove dependencies shipped |
 | `python` | Directory containing installed `.dist-info` metadata | Installed distribution metadata; no package installation |
 | `docker-archive` | Local archive exported with existing build tooling | No registry pull or Docker socket |
@@ -263,7 +264,7 @@ container without network access.
 
 ### Components recognised by version strings
 
-Syft's [binary classifiers](https://github.com/anchore/syft/blob/v1.54.0/syft/pkg/cataloger/binary/classifiers.go)
+Syft's [binary classifiers](https://github.com/anchore/syft/blob/v1.55.0/syft/pkg/cataloger/binary/classifiers.go)
 recognise known programs from version strings inside binaries; the linked
 file lists them. The test suite of this tool checks BusyBox, OpenSSL and curl
 in binaries that carry only a version string and no package database entry
@@ -275,7 +276,7 @@ field in `quality.json` counts them. The same count appears in provenance.
 Nothing is found by these classifiers when the version string has been
 removed, altered or obfuscated. The reported version is the upstream version
 string; backported vendor fixes are not visible. Many components common in
-embedded firmware are not recognised by Syft v1.54.0: zlib, Dropbear, OpenSSH,
+embedded firmware are not recognised by Syft v1.55.0: zlib, Dropbear, OpenSSH,
 dnsmasq, hostapd, wpa_supplicant, U-Boot, mbedTLS and wolfSSL.
 
 This is not binary code analysis of the kind commercial firmware analysers
@@ -286,26 +287,41 @@ own version string is not found by these classifiers.
 
 The CLI does not upload data or send telemetry. Generation writes the SBOM and
 sidecars to the output directory you selected. If you choose to submit an
-inventory to a service, upload only `sbom.cdx.json`; keep `provenance.json` and
-`quality.json` in your local evidence store. Submission is a manual action. The
-generator has no automatic upload.
+inventory to a service, upload only `sbom.cdx.json` or `sbom.cdx.zip`; keep
+`provenance.json` and `quality.json` in your local evidence store. Submission is
+a manual action. The generator has no automatic upload. A ZIP is for the
+crAcken web app's **SPDX JSON → ZIP archive** upload mode, including a ZIP that
+contains only CycloneDX JSON; do not select the CycloneDX file picker for a ZIP.
+ZIP upload is available to every account. The public API and `cracken-action`
+accept one JSON document up to 10 MiB and do not accept ZIP archives. A single
+JSON document larger than 10 MiB requires the large-SBOM option.
 
 ## Review the output
 
 A successful output directory contains:
 
-- `sbom.cdx.json`: minimized CycloneDX 1.5 inventory;
+- `sbom.cdx.json`: minimized CycloneDX 1.5 inventory, or `sbom.cdx.zip` when
+  `--zip` is selected or JSON exceeds 10 MiB; ZIP output is for web upload
+  through the **SPDX JSON → ZIP archive** mode;
 - `provenance.json`: CLI and engine versions, resolved scan-policy digest,
   supplied target identifier, generation time, privacy profile and SHA-256 of
   the final SBOM (for firmware images also the `firmware` block described above);
 - `quality.json`: package counts and identified gaps or removals.
+
+A ZIP contains only `sbom.cdx.json`; the sidecars remain outside it. The crAcken
+web app accepts ZIPs up to 16 MiB both compressed and unpacked, through the
+**SPDX JSON → ZIP archive** mode, for every account without the large-SBOM
+option. The public API and `cracken-action` accept one JSON document up to
+10 MiB and no ZIP; a single JSON document over 10 MiB requires the large-SBOM
+option. No inventory is truncated. The provenance digest always covers the
+uncompressed JSON bytes.
 
 Review all three files. Component names, versions, package URLs and licenses
 remain visible and may include confidential package identities. The normalizer
 excludes arbitrary properties, source/file lists, location evidence, contacts
 and nested originals. Local scan paths and full raw Syft output are not included.
 
-Compare the exact final bytes to the recorded digest locally:
+Compare the exact final JSON bytes to the recorded digest locally (extract the JSON first for a ZIP):
 
 ```sh
 # Linux

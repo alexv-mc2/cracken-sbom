@@ -1,10 +1,13 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -249,7 +252,7 @@ func TestSignalNotifyContextCancelsAndCleansActualPrivateEngineCopy(t *testing.T
 	dir := filepath.Dir(output)
 	marker := filepath.Join(dir, "scan-started")
 	script := filepath.Join(dir, "mock-syft")
-	scriptBody := "#!/bin/sh\nif [ \"$1\" = version ]; then printf '{\"version\":\"1.54.0\"}\\n'; exit 0; fi\nprintf '%s\\n' \"$0\" > '" + marker + "'\nexec /bin/sleep 60\n"
+	scriptBody := "#!/bin/sh\nif [ \"$1\" = version ]; then printf '{\"version\":\"1.55.0\"}\\n'; exit 0; fi\nprintf '%s\\n' \"$0\" > '" + marker + "'\nexec /bin/sleep 60\n"
 	if err := os.WriteFile(script, []byte(scriptBody), 0700); err != nil {
 		t.Fatal("write authenticated mock engine")
 	}
@@ -333,5 +336,99 @@ func TestPublishOutputsNeverOverwritesExistingDirectory(t *testing.T) {
 	entries, _ := os.ReadDir(output)
 	if len(entries) != 0 {
 		t.Fatal("existing output modified")
+	}
+}
+
+func TestCLIZipContainsOnlySBOMAndDigest(t *testing.T) {
+	args, output := cliFixture(t)
+	args = append(args, "--zip")
+	if err := runCLI(context.Background(), args, &bytes.Buffer{}, successRunner, fixedNow); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(output, "sbom.cdx.zip"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(zr.File) != 1 || zr.File[0].Name != "sbom.cdx.json" {
+		t.Fatal("ZIP must contain only the SBOM")
+	}
+	f, err := zr.File[0].Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	sbom, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provenance, err := os.ReadFile(filepath.Join(output, "provenance.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p map[string]any
+	if json.Unmarshal(provenance, &p) != nil || p["sbom_sha256"] != sha256Hex(sbom) {
+		t.Fatal("digest must bind uncompressed SBOM")
+	}
+	if _, err := os.Stat(filepath.Join(output, "sbom.cdx.json")); !os.IsNotExist(err) {
+		t.Fatal("unexpected standalone SBOM")
+	}
+}
+
+func TestZipUncompressedLimit(t *testing.T) {
+	if _, err := zipSBOM(make([]byte, maxZipBytes+1)); err == nil {
+		t.Fatal("oversized uncompressed SBOM accepted")
+	}
+	if _, err := zipSBOM(make([]byte, maxZipBytes)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDirTargetMarksSourceTree(t *testing.T) {
+	args, output := cliFixture(t)
+	args[2] = "dir"
+	runner := func(_ context.Context, _, _, kind string) ([]byte, error) {
+		if kind != "dir" {
+			t.Fatalf("unexpected target %s", kind)
+		}
+		return []byte(validRawSBOM), nil
+	}
+	if err := runCLI(context.Background(), args, &bytes.Buffer{}, runner, fixedNow); err != nil {
+		t.Fatal(err)
+	}
+	quality, err := os.ReadFile(filepath.Join(output, "quality.json"))
+	if err != nil || !bytes.Contains(quality, []byte("not evidence of shipped")) {
+		t.Fatal("missing source tree warning")
+	}
+}
+
+func TestCLIAutomaticallyZipsLargeSBOM(t *testing.T) {
+	args, output := cliFixture(t)
+	var raw bytes.Buffer
+	raw.WriteString(`{"bomFormat":"CycloneDX","specVersion":"1.5","components":[`)
+	for i := 0; i < 12000; i++ {
+		if i > 0 {
+			raw.WriteByte(',')
+		}
+		fmt.Fprintf(&raw, `{"type":"library","name":"pkg-%05d%s","version":"1.0"}`, i, strings.Repeat("a", 900))
+	}
+	raw.WriteString(`]}`)
+	runner := func(context.Context, string, string, string) ([]byte, error) { return raw.Bytes(), nil }
+	if err := runCLI(context.Background(), args, &bytes.Buffer{}, runner, fixedNow); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(output, "sbom.cdx.zip"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(zr.File) != 1 || zr.File[0].UncompressedSize64 <= maxUploadBytes || zr.File[0].UncompressedSize64 > maxZipBytes {
+		t.Fatal("automatic ZIP has wrong size or contents")
 	}
 }

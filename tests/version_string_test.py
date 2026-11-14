@@ -100,7 +100,7 @@ def main():
     write_stub(binary_rootfs / "bin/busybox", b"BusyBox v1.36.1 (2023-11-07 18:53:09 UTC)")
     write_stub(binary_rootfs / "usr/bin/openssl", b"OpenSSL 3.0.13 30 Jan 2024")
     write_stub(binary_rootfs / "usr/bin/curl", b"curl/8.5.0", b"libcurl/8.5.0")
-    # Syft v1.54.0 has no classifiers for these common firmware components.
+    # Syft v1.55.0 has no classifiers for these common firmware components.
     write_stub(binary_rootfs / "usr/lib/libz.so.1.2.13",
                b"deflate 1.2.13 Copyright 1995-2022 Jean-loup Gailly and Mark Adler")
     write_stub(binary_rootfs / "usr/sbin/dropbear", b"Dropbear sshd v2022.83")
@@ -120,12 +120,12 @@ def main():
     if any(c.get("properties") for c in unmarked):
         raise AssertionError("dpkg busybox/libssl3 and OS components must have no detection property")
     if any(c.get("name", "").lower() in {"zlib", "libz", "dropbear"} for c in components):
-        raise AssertionError("Syft v1.54.0 unexpectedly detected a zlib or Dropbear stub")
+        raise AssertionError("Syft v1.55.0 unexpectedly detected a zlib or Dropbear stub")
     if quality.get("version_string_components") != 3:
         raise AssertionError("quality must count exactly 3 version-string components")
     print(f"PASS actual Syft version-string inventory: before={len(baseline_components)} after={len(components)} components")
     print("PASS BusyBox, OpenSSL and curl detection properties; dpkg and OS components unmarked; quality count=3")
-    print("PASS documented Syft v1.54.0 limit: zlib and Dropbear stubs are not recognised")
+    print("PASS documented Syft v1.55.0 limit: zlib and Dropbear stubs are not recognised")
 
     write_stub(removed_version_rootfs / "bin/busybox", b"BusyBox")
     removed_version, removed_quality = inventory(removed_version_rootfs, "removed-version")

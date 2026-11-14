@@ -4,7 +4,7 @@
 set -euo pipefail
 TOOL_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 GO=${GO:-go}
-SYFT=${SYFT:?Set SYFT to an authenticated Syft v1.54.0 executable}
+SYFT=${SYFT:?Set SYFT to an authenticated Syft v1.55.0 executable}
 PYTHON=${PYTHON:-python3}
 if [[ -z "${CRACKEN_SBOM_TEST_OUTPUT:-}" ]]; then
   CRACKEN_SBOM_TEST_OUTPUT=$(mktemp -d "${TMPDIR:-/tmp}/cracken-sbom-tests.XXXXXX")
@@ -27,7 +27,7 @@ cd "$TOOL_DIR"
 "$PYTHON" "$TOOL_DIR/tests/make-archives.py" "$TOOL_DIR/fixtures/rootfs" "$CRACKEN_SBOM_TEST_OUTPUT/archives"
 # Synthetic firmware image: opaque bytes unpacked by tests/fake-extractor.sh.
 head -c 4096 /dev/zero > "$CRACKEN_SBOM_TEST_OUTPUT/archives/image.bin"
-for target in rootfs npm python docker-archive oci-archive firmware-image; do
+for target in rootfs npm python dir docker-archive oci-archive firmware-image; do
   extra=()
   case "$target" in
     docker-archive) fixture="$CRACKEN_SBOM_TEST_OUTPUT/archives/docker.tar" ;;

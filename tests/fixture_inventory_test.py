@@ -69,6 +69,28 @@ def check_firmware(folder: Path, sbom_text: str, provenance: dict, quality: dict
     require("0-512.unknown" not in sbom_text, "firmware: extracted entry names leaked into the SBOM")
 
 
+def check_source_tree(output: Path) -> None:
+    folder = output / "dir"
+    sbom_bytes = (folder / "sbom.cdx.json").read_bytes()
+    text = sbom_bytes.decode()
+    document = json.loads(text)
+    require(document.get("bomFormat") == "CycloneDX" and document.get("specVersion") == "1.5", "dir: wrong SBOM format")
+    purls = [component.get("purl", "") or "" for component in document.get("components", [])]
+    for ecosystem in ("golang", "cargo", "maven", "nuget"):
+        require(any(purl.startswith(f"pkg:{ecosystem}/") for purl in purls), f"dir: missing {ecosystem} PURL: {purls!r}")
+    provenance = json.loads((folder / "provenance.json").read_text())
+    quality = json.loads((folder / "quality.json").read_text())
+    require(provenance.get("engine") == {"name": "syft", "version": "1.55.0"}, "dir: wrong engine identity")
+    require(provenance.get("target") == {"identifier": "fixture-dir", "type": "dir"}, "dir: wrong target")
+    require(provenance.get("sbom_sha256") == hashlib.sha256(sbom_bytes).hexdigest(), "dir: incorrect SBOM digest")
+    require(provenance.get("quality") == quality, "dir: provenance quality mismatch")
+    warnings = " ".join(quality.get("warnings", [])).lower()
+    require("source tree" in warnings and "not evidence of shipped" in warnings, "dir: missing source tree warning")
+    for marker in FORBIDDEN_MARKERS:
+        require(marker not in text, f"dir: local file marker leaked: {marker}")
+    print("PASS actual Syft source tree: golang, cargo, maven, nuget PURLs and quality warning")
+
+
 def main() -> None:
     output_value = os.environ.get("CRACKEN_SBOM_TEST_OUTPUT")
     require(bool(output_value), "CRACKEN_SBOM_TEST_OUTPUT must point to generated fixture outputs")
@@ -94,7 +116,7 @@ def main() -> None:
         provenance = json.loads((folder / "provenance.json").read_text())
         digest = hashlib.sha256(sbom_bytes).hexdigest()
         require(provenance.get("sbom_sha256") == digest, f"{target}: digest does not bind final SBOM bytes")
-        require(provenance.get("engine") == {"name": "syft", "version": "1.54.0"}, f"{target}: wrong engine identity")
+        require(provenance.get("engine") == {"name": "syft", "version": "1.55.0"}, f"{target}: wrong engine identity")
         require(provenance.get("generator", {}).get("name") == "cracken-sbom", f"{target}: wrong generator identity")
         require(provenance.get("target") == {"identifier": f"fixture-{target}", "type": target}, f"{target}: wrong safe target assertion")
         require(provenance.get("provenance_status") == "customer_asserted_local", f"{target}: wrong provenance status")
@@ -112,6 +134,7 @@ def main() -> None:
         if target == "firmware-image":
             check_firmware(folder, text, provenance, quality)
         print(f"PASS actual Syft fixture inventory: {target}")
+    check_source_tree(output)
 
 
 if __name__ == "__main__":

@@ -188,7 +188,7 @@ jobs:
             *) exit 1 ;;
           esac
           tar -xzf "cracken-sbom_${RELEASE_TAG#v}_${platform}.tar.gz"
-          expected="cracken-sbom ${RELEASE_TAG#v} (Syft 1.54.0)"
+          expected="cracken-sbom ${RELEASE_TAG#v} (Syft 1.55.0)"
           test "$(./cracken-sbom version)" = "$expected"
           ./cracken-sbom version
 
@@ -241,6 +241,6 @@ jobs:
             *) exit 1 ;;
           esac
           tar -xzf "cracken-sbom_${VERSION#v}_${platform}.tar.gz"
-          expected="cracken-sbom ${VERSION#v} (Syft 1.54.0)"
+          expected="cracken-sbom ${VERSION#v} (Syft 1.55.0)"
           test "$(./cracken-sbom version)" = "$expected"
           ./cracken-sbom version

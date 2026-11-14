@@ -14,7 +14,7 @@ import (
 )
 
 const maxComponents = 50000
-const maxSBOMBytes = 10 * 1024 * 1024
+const maxSBOMBytes = 16 * 1024 * 1024
 
 var identifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+_-]*$`)
 var purlQualifierVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+_~:-]*$`)
@@ -520,6 +520,9 @@ func normalizeSBOM(input []byte, ctx ProvenanceContext) ([]byte, Quality, error)
 	if len(components) == 0 {
 		return nil, quality, errors.New("empty_sbom: no package components")
 	}
+	if ctx.TargetType == "dir" {
+		quality.Warnings = append(quality.Warnings, "This source tree inventory is not evidence of shipped components.")
+	}
 	if quality.MissingVersions > 0 {
 		quality.Warnings = append(quality.Warnings, "Package versions are missing; inventory coverage is incomplete.")
 	}
@@ -610,7 +613,7 @@ func normalizeSBOM(input []byte, ctx ProvenanceContext) ([]byte, Quality, error)
 	}
 	encoded = append(encoded, '\n')
 	if len(encoded) > maxSBOMBytes {
-		return nil, quality, errors.New("minimized SBOM exceeds 10 MiB upload limit")
+		return nil, quality, errors.New("minimized SBOM exceeds 16 MiB uncompressed ZIP limit")
 	}
 	return encoded, quality, nil
 }

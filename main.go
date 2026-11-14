@@ -1,6 +1,8 @@
 package main
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,16 +17,18 @@ import (
 	"time"
 )
 
-const usage = "invalid flags; use generate --target-type TYPE --target PATH --target-id ID --output NEW-DIR --syft ABSOLUTE-BINARY [--allow-incomplete] [--extractor ABSOLUTE-BINARY [--extractor-kind unblob|binwalk] [--work-dir ABSOLUTE-DIR]]"
+const usage = "invalid flags; use generate --target-type TYPE --target PATH --target-id ID --output NEW-DIR --syft ABSOLUTE-BINARY [--allow-incomplete] [--zip] [--extractor ABSOLUTE-BINARY [--extractor-kind unblob|binwalk] [--work-dir ABSOLUTE-DIR]]; " +
+	"--zip and automatic ZIP output for SBOMs over 10 MiB are for crAcken web-app upload through SPDX JSON → ZIP archive mode"
 
 // Release builds bind this value to their exact tag with -ldflags -X.
 var toolVersion = "1.1.0"
 
 const maxUploadBytes = 10 << 20
+const maxZipBytes = 16 << 20
 
 type generateOptions struct {
 	targetType, target, targetID, output, syft string
-	allowIncomplete                            bool
+	allowIncomplete, zipOutput                 bool
 	// Firmware images only: the extractor as given and as resolved, and its kind.
 	extractor, extractorGiven, extractorKind, workDir string
 }
@@ -51,6 +55,7 @@ func parseOptions(args []string) (generateOptions, error) {
 	fs.StringVar(&o.targetID, "target-id", "", "release, commit or image digest")
 	fs.StringVar(&o.output, "output", "", "new output directory")
 	fs.StringVar(&o.syft, "syft", "", "absolute path to verified Syft binary")
+	fs.BoolVar(&o.zipOutput, "zip", false, "package the SBOM in a ZIP archive for crAcken web-app upload (SPDX JSON → ZIP archive mode)")
 	fs.BoolVar(&o.allowIncomplete, "allow-incomplete", false, "acknowledge incomplete metadata")
 	fs.StringVar(&o.extractor, "extractor", "", "absolute path to unblob or binwalk (firmware-image only)")
 	fs.StringVar(&o.extractorKind, "extractor-kind", "", "unblob or binwalk (firmware-image only)")
@@ -62,7 +67,7 @@ func parseOptions(args []string) (generateOptions, error) {
 		return o, errors.New("required flags are missing or engine path is not absolute")
 	}
 	switch o.targetType {
-	case "rootfs", "npm", "python", "oci-archive", "docker-archive":
+	case "dir", "rootfs", "npm", "python", "oci-archive", "docker-archive":
 		if o.extractor != "" || o.extractorKind != "" || o.workDir != "" {
 			return o, errors.New("--extractor, --extractor-kind and --work-dir are only valid with --target-type firmware-image")
 		}
@@ -75,7 +80,7 @@ func parseOptions(args []string) (generateOptions, error) {
 			return o, errors.New("--work-dir must be an absolute path")
 		}
 	default:
-		return o, errors.New("target type must be rootfs, npm, python, oci-archive, docker-archive or firmware-image")
+		return o, errors.New("target type must be dir, rootfs, npm, python, oci-archive, docker-archive or firmware-image")
 	}
 	return o, nil
 }
@@ -105,7 +110,7 @@ func validatePaths(o *generateOptions) error {
 	if err != nil {
 		return err
 	}
-	wantDir := o.targetType == "rootfs" || o.targetType == "npm" || o.targetType == "python"
+	wantDir := o.targetType == "dir" || o.targetType == "rootfs" || o.targetType == "npm" || o.targetType == "python"
 	if (wantDir && !info.IsDir()) || (!wantDir && !info.Mode().IsRegular()) {
 		return errors.New("target filesystem type does not match declared target type")
 	}
@@ -215,8 +220,8 @@ func runCLI(ctx context.Context, args []string, stdout io.Writer, runner engineR
 	if err := contextError(ctx); err != nil {
 		return err
 	}
-	if len(sbom) > maxUploadBytes {
-		return errors.New("minimized SBOM exceeds the 10 MiB upload limit; inventory was not truncated")
+	if len(sbom) > maxZipBytes {
+		return errors.New("minimized SBOM exceeds the 16 MiB uncompressed ZIP limit; inventory was not truncated")
 	}
 	if quality.MissingVersions > 0 && !o.allowIncomplete {
 		return fmt.Errorf("inventory requires acknowledgement: %d packages, %d missing versions. Inspect the target and explicitly use --allow-incomplete", quality.EmittedComponents, quality.MissingVersions)
@@ -229,10 +234,21 @@ func runCLI(ctx context.Context, args []string, stdout io.Writer, runner engineR
 	if err != nil {
 		return errors.New("cannot serialize quality summary")
 	}
-	if err := publishOutputs(ctx, o.output, sbom, provenance, append(qualityJSON, '\n')); err != nil {
+	outputName, outputBytes := "sbom.cdx.json", sbom
+	if o.zipOutput || len(sbom) > maxUploadBytes {
+		outputName = "sbom.cdx.zip"
+		outputBytes, err = zipSBOM(sbom)
+		if err != nil {
+			return err
+		}
+	}
+	if err := publishNamedOutputs(ctx, o.output, outputName, outputBytes, provenance, append(qualityJSON, '\n')); err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintln(stdout, "Generated sbom.cdx.json, provenance.json and quality.json. Review the SBOM before manual upload; provenance remains customer-held.")
+	_, _ = fmt.Fprintf(stdout, "Generated %s, provenance.json and quality.json. Review the SBOM before manual upload; provenance remains customer-held.\n", outputName)
+	if outputName == "sbom.cdx.zip" {
+		_, _ = fmt.Fprintln(stdout, "This ZIP is for upload in the crAcken web app through SPDX JSON → ZIP archive mode; the public API and cracken-action accept one JSON document up to 10 MiB, not ZIP archives.")
+	}
 	if o.targetType == firmwareTargetType {
 		_, _ = fmt.Fprintln(stdout, "The inventory comes from a best-effort local extraction of the image; see the firmware block in provenance.json and the warnings in quality.json.")
 	}
@@ -248,13 +264,39 @@ func contextError(ctx context.Context) error {
 	return nil
 }
 
+func zipSBOM(sbom []byte) ([]byte, error) {
+	if len(sbom) > maxZipBytes {
+		return nil, errors.New("SBOM exceeds the 16 MiB uncompressed ZIP limit")
+	}
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	f, err := w.Create("sbom.cdx.json")
+	if err != nil {
+		return nil, errors.New("cannot create SBOM ZIP")
+	}
+	if _, err = f.Write(sbom); err != nil {
+		return nil, errors.New("cannot write SBOM ZIP")
+	}
+	if err = w.Close(); err != nil {
+		return nil, errors.New("cannot finish SBOM ZIP")
+	}
+	if buf.Len() > maxZipBytes {
+		return nil, errors.New("SBOM ZIP exceeds the 16 MiB upload limit")
+	}
+	return buf.Bytes(), nil
+}
+
 func publishOutputs(ctx context.Context, output string, sbom, provenance, quality []byte) error {
+	return publishNamedOutputs(ctx, output, "sbom.cdx.json", sbom, provenance, quality)
+}
+
+func publishNamedOutputs(ctx context.Context, output, name string, sbom, provenance, quality []byte) error {
 	stage, err := os.MkdirTemp(filepath.Dir(output), ".cracken-sbom-output-")
 	if err != nil {
 		return errors.New("cannot create private output workspace")
 	}
 	defer os.RemoveAll(stage)
-	for name, data := range map[string][]byte{"sbom.cdx.json": sbom, "provenance.json": provenance, "quality.json": quality} {
+	for name, data := range map[string][]byte{name: sbom, "provenance.json": provenance, "quality.json": quality} {
 		if err := contextError(ctx); err != nil {
 			return err
 		}

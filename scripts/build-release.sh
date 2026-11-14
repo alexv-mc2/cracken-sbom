@@ -7,7 +7,7 @@ if [[ $# -ne 2 || ! $1 =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
 fi
 version=${1#v}
 output=$2
-: "${SYFT:?Set SYFT to the independently verified Syft 1.54.0 executable}"
+: "${SYFT:?Set SYFT to the independently verified Syft 1.55.0 executable}"
 : "${SOURCE_DATE_EPOCH:?Set SOURCE_DATE_EPOCH to the source commit timestamp}"
 mkdir "$output"
 output=$(cd "$output" && pwd)

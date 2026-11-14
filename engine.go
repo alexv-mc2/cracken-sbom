@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-const engineVersion = "1.54.0"
+const engineVersion = "1.55.0"
 
 // All network enrichment is explicitly disabled. Remaining defaults are bound
 // by the exact engine version and authenticated per-platform binary digest.
@@ -213,7 +213,7 @@ func runEngineWithManifest(ctx context.Context, binary, target, targetType strin
 	}
 	source := targetType
 	switch targetType {
-	case "rootfs", "npm", "python":
+	case "dir", "rootfs", "npm", "python":
 		source = "dir"
 	case "oci-archive", "docker-archive":
 	default:

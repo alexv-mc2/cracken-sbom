@@ -2,10 +2,10 @@ cracken-sbom local SBOM generator wrapper
 Copyright 2026 crAcken contributors
 Licensed under the Apache License, Version 2.0.
 
-This wrapper calls separately installed, unmodified Syft v1.54.0.
+This wrapper calls separately installed, unmodified Syft v1.55.0.
 Syft is copyright Anchore, Inc. and contributors, licensed Apache-2.0.
 Syft is not vendored into this repository or redistributed by this package.
-https://github.com/anchore/syft/tree/v1.54.0
+https://github.com/anchore/syft/tree/v1.55.0
 
 CycloneDX specification 1.5 JSON schemas are Copyright OWASP Foundation,
 licensed Apache-2.0. The SPDX identifier enum is embedded for runtime validation;

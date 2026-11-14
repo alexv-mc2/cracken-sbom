@@ -18,27 +18,47 @@ import (
 )
 
 type embeddedRule struct {
+	// An empty hint allows library banners in any eligible ELF basename.
 	name, hint, pattern, vendor, product string
 	re                                   *regexp.Regexp
 }
 
 var embeddedRules = func() []embeddedRule {
 	rules := []embeddedRule{
-		{name: "zlib", hint: "libz", pattern: `(?i)deflate ([0-9]+\.[0-9]+(?:\.[0-9]+)*)`, vendor: "zlib", product: "zlib"},
+		{name: "zlib", pattern: `\bdeflate ([0-9]+\.[0-9]+(?:\.[0-9]+)*) Copyright 1995-[0-9]{4} Jean-loup Gailly and Mark Adler\b`, vendor: "zlib", product: "zlib"},
 		{name: "dropbear", hint: "dropbear", pattern: `Dropbear sshd v([0-9]+\.[0-9]+(?:\.[0-9]+)*)`, vendor: "dropbear_ssh_project", product: "dropbear_ssh"},
 		{name: "openssh", hint: "ssh", pattern: `OpenSSH_([0-9]+\.[0-9]+(?:p[0-9]+)?)`, vendor: "openbsd", product: "openssh"},
 		{name: "dnsmasq", hint: "dnsmasq", pattern: `(?i)dnsmasq(?:-| version )([0-9]+\.[0-9]+(?:\.[0-9]+)*)`, vendor: "thekelleys", product: "dnsmasq"},
 		{name: "hostapd", hint: "hostapd", pattern: `hostapd v([0-9]+\.[0-9]+(?:\.[0-9]+)*)`, vendor: "w1.fi", product: "hostapd"},
 		{name: "wpa_supplicant", hint: "wpa_supplicant", pattern: `wpa_supplicant v([0-9]+\.[0-9]+(?:\.[0-9]+)*)`, vendor: "w1.fi", product: "wpa_supplicant"},
 		{name: "u-boot", hint: "", pattern: `U-Boot ([0-9]{4}\.[0-9]{2}(?:\.[0-9]+)?)`, vendor: "denx", product: "u-boot"},
-		{name: "mbedtls", hint: "mbed", pattern: `mbed TLS ([0-9]+\.[0-9]+\.[0-9]+)`, vendor: "trustedfirmware", product: "mbed_tls"},
-		{name: "wolfssl", hint: "wolfssl", pattern: `wolfSSL ([0-9]+\.[0-9]+\.[0-9]+)`, vendor: "wolfssl", product: "wolfssl"},
+		{name: "mbedtls", pattern: `\bmbed TLS ([0-9]+\.[0-9]+\.[0-9]+)(?:$|[\x00[:space:]])`, vendor: "trustedfirmware", product: "mbed_tls"},
+		{name: "wolfssl", pattern: `\bwolfSSL ([0-9]+\.[0-9]+\.[0-9]+)(?:$|[\x00[:space:]])`, vendor: "wolfssl", product: "wolfssl"},
 	}
 	for i := range rules {
 		rules[i].re = regexp.MustCompile(rules[i].pattern)
 	}
 	return rules
 }()
+
+// Raw images without a bootloader path must carry the complete build banner.
+var embeddedRawUBoot = regexp.MustCompile(`\bU-Boot ([0-9]{4}\.[0-9]{2}(?:\.[0-9]+)?)(?:[-+][[:alnum:]_.+-]+)? \((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) +[0-9]{1,2} [0-9]{4} - [0-9]{2}:[0-9]{2}:[0-9]{2}(?: [^()\x00\r\n]+)?\)`)
+
+func embeddedBootloaderPath(path string) bool {
+	path = strings.ToLower(filepath.ToSlash(path))
+	if strings.HasPrefix(filepath.Base(path), "u-boot") {
+		return true
+	}
+	if filepath.Ext(path) != ".bin" {
+		return false
+	}
+	for _, dir := range strings.Split(filepath.Dir(path), "/") {
+		if dir == "boot" || dir == "firmware" {
+			return true
+		}
+	}
+	return false
+}
 
 type embeddedLimits struct {
 	maxFileBytes int64
@@ -139,19 +159,20 @@ func detectEmbedded(ctx context.Context, root string, raw []byte, limits embedde
 		}
 		elf := bytes.HasPrefix(data, []byte{0x7f, 'E', 'L', 'F'})
 		uboot := bytes.HasPrefix(data, []byte{0x27, 0x05, 0x19, 0x56})
-		if !elf && !uboot {
-			return nil
-		}
 		base := strings.ToLower(filepath.Base(rel))
 		for _, rule := range embeddedRules {
+			re := rule.re
 			if rule.name == "u-boot" {
-				if !uboot && (!elf || !strings.Contains(base, "u-boot")) {
+				if elf && !strings.Contains(base, "u-boot") {
 					continue
 				}
-			} else if !elf || !strings.Contains(base, rule.hint) {
+				if !elf && !uboot && !embeddedBootloaderPath(rel) {
+					re = embeddedRawUBoot
+				}
+			} else if !elf || (rule.hint != "" && !strings.Contains(base, rule.hint)) {
 				continue
 			}
-			match := rule.re.FindSubmatch(data)
+			match := re.FindSubmatch(data)
 			if len(match) < 2 {
 				continue
 			}

@@ -13,7 +13,7 @@ guide. Their default SPDX formats differ:
 
 | Yocto release | Default SBOM format | Default image output directory | Upload to crAcken |
 |---|---|---|---|
-| [Scarthgap 5.0](https://docs.yoctoproject.org/5.0/dev-manual/sbom.html) | SPDX 2.2 JSON | `tmp/deploy/images/<machine>/` inside the build directory | Repack the image's SPDX document archive as ZIP using the steps below |
+| [Scarthgap 5.0](https://docs.yoctoproject.org/5.0/dev-manual/sbom.html) | SPDX 2.2 JSON | `tmp/deploy/images/<machine>/` inside the build directory | Repack the image's SPDX document archive as ZIP and upload it through the web app's SPDX JSON → ZIP archive mode |
 | [Wrynose 6.0](https://docs.yoctoproject.org/6.0/dev-manual/sbom.html) | SPDX 3.0.1 JSON | `tmp/deploy/images/<machine>/` inside the build directory | Upload the single complete `*.rootfs.spdx.json` file for the image |
 
 Paths assume the default `TMPDIR` and deployment settings. Custom settings can
@@ -27,10 +27,14 @@ Do not combine multiple SPDX 3 documents or mix SPDX 2 and SPDX 3 in a ZIP.
 A ZIP does not convert between SPDX versions. Keep the native SBOM for your
 records and review it for sensitive information before uploading.
 
-A single JSON upload is limited to 10 MiB. A ZIP may contain one complete
-SPDX 3 document and is limited to 16 MiB both compressed and uncompressed.
-ZIP uploads and JSON files over 10 MiB require the large SBOM capability in
-crAcken. Check the upload result and any coverage notices.
+A single JSON document is limited to 10 MiB for the public API and
+`cracken-action`, which do not accept ZIP archives. The crAcken web app accepts
+a ZIP up to 16 MiB both compressed and uncompressed in its SPDX JSON → ZIP
+archive mode; ZIP upload is available to every account and does not require the
+large-SBOM option. This mode also accepts a ZIP containing only CycloneDX JSON;
+do not use the CycloneDX file picker for a ZIP. A single JSON document larger
+than 10 MiB requires the large-SBOM option. Check the upload result and any
+coverage notices.
 
 Older Yocto releases have different defaults. Use the manual for your exact
 release and check the format before uploading; do not assume that every file
@@ -121,7 +125,8 @@ The ZIP includes all SPDX documents from the image archive; it excludes
 `index.json` and any source/package content archives. Keep the extracted index
 and original archive locally for your records.
 
-On crAcken's Tools page, choose SPDX JSON and upload `yocto-image.spdx.zip`.
+On crAcken's Tools page, choose SPDX JSON → ZIP archive and upload
+`yocto-image.spdx.zip`.
 The app applies its normal upload limits and reports extraction results;
 review any missing-component or partial-coverage notice before relying on the
 analysis. Packaging the documents does not prove that the inventory is complete

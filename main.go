@@ -213,6 +213,12 @@ func runCLI(ctx context.Context, args []string, stdout io.Writer, runner engineR
 	if err := contextError(ctx); err != nil {
 		return err
 	}
+	if scanType == "rootfs" {
+		raw, err = detectEmbedded(ctx, scanTarget, raw, defaultEmbeddedLimits)
+		if err != nil {
+			return err
+		}
+	}
 	sbom, quality, err := normalizeSBOM(raw, provenanceCtx)
 	if err != nil {
 		return err

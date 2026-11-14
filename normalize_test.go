@@ -456,6 +456,7 @@ func TestNormalizeVersionStringDetection(t *testing.T) {
 			map[string]string{"name": "arbitrary", "value": "private-canary"},
 			map[string]string{"name": "syft:package:foundBy", "value": "binary-classifier-cataloger"},
 		}, true},
+		{"embedded detector", []any{map[string]string{"name": "syft:package:foundBy", "value": "cracken-embedded-version-detector"}}, true},
 		{"dpkg", []any{map[string]string{"name": "syft:package:foundBy", "value": "dpkg-db-cataloger"}}, false},
 		{"elf", []any{map[string]string{"name": "syft:package:foundBy", "value": "elf-binary-package-cataloger"}}, false},
 		{"not exact", []any{map[string]string{"name": "syft:package:foundBy", "value": "binary-classifier-cataloger "}}, false},

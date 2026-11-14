@@ -269,19 +269,20 @@ recognise known programs from version strings inside binaries; the linked
 file lists them. The test suite of this tool checks BusyBox, OpenSSL and curl
 in binaries that carry only a version string and no package database entry
 (`tests/version_string_test.py`). Other programs on the list are recognised
-by Syft and are not separately tested here. These components carry
+by Syft and are not separately tested here. For rootfs and firmware-image
+scans, this tool also recognises zlib, Dropbear, OpenSSH, dnsmasq, hostapd,
+wpa_supplicant, U-Boot, mbedTLS and wolfSSL from version strings. These
+components carry
 `cracken:detection:method=version-string`. The `version_string_components`
 field in `quality.json` counts them. The same count appears in provenance.
 
-Nothing is found by these classifiers when the version string has been
+Nothing is found by these detectors when the version string has been
 removed, altered or obfuscated. The reported version is the upstream version
-string; backported vendor fixes are not visible. Many components common in
-embedded firmware are not recognised by Syft v1.55.0: zlib, Dropbear, OpenSSH,
-dnsmasq, hostapd, wpa_supplicant, U-Boot, mbedTLS and wolfSSL.
+string; backported vendor fixes are not visible.
 
 This is not binary code analysis of the kind commercial firmware analysers
 such as ONEKEY and Finite State do. Code compiled into a program without its
-own version string is not found by these classifiers.
+own version string is not found by these detectors.
 
 ## What leaves your machine
 

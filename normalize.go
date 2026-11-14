@@ -418,7 +418,7 @@ func normalizeComponent(c map[string]any, ref string, quality *Quality) (map[str
 			if !nameOK || !valueOK {
 				return nil, errors.New("malformed component property")
 			}
-			if name == "syft:package:foundBy" && value == "binary-classifier-cataloger" {
+			if name == "syft:package:foundBy" && (value == "binary-classifier-cataloger" || value == "cracken-embedded-version-detector") {
 				versionString = true
 			}
 		}

@@ -106,12 +106,12 @@ def main():
     write_stub(binary_rootfs / "usr/sbin/dropbear", b"Dropbear sshd v2022.83")
     detected, quality = inventory(binary_rootfs, "binaries")
     components = detected.get("components", [])
-    if len(components) != 6:
-        raise AssertionError("rootfs with binary stubs must emit exactly 6 components")
-    expected = {("busybox", "1.36.1"), ("openssl", "3.0.13"), ("curl", "8.5.0")}
+    if len(components) != 8:
+        raise AssertionError("rootfs with binary stubs must emit exactly 8 components")
+    expected = {("busybox", "1.36.1"), ("openssl", "3.0.13"), ("curl", "8.5.0"), ("zlib", "1.2.13"), ("dropbear", "2022.83")}
     marked = [c for c in components if DETECTION_PROPERTY in c.get("properties", [])]
-    if {(c.get("name"), c.get("version")) for c in marked} != expected or len(marked) != 3:
-        raise AssertionError("expected exactly busybox 1.36.1, openssl 3.0.13 and curl 8.5.0 marked")
+    if {(c.get("name"), c.get("version")) for c in marked} != expected or len(marked) != 5:
+        raise AssertionError("expected five version-string components")
     if any(c.get("properties") != [DETECTION_PROPERTY] for c in marked):
         raise AssertionError("binary components must carry exactly the safe detection property")
     unmarked = [c for c in components if c not in marked]
@@ -119,13 +119,10 @@ def main():
         raise AssertionError("binary stubs changed the original dpkg or OS component identities")
     if any(c.get("properties") for c in unmarked):
         raise AssertionError("dpkg busybox/libssl3 and OS components must have no detection property")
-    if any(c.get("name", "").lower() in {"zlib", "libz", "dropbear"} for c in components):
-        raise AssertionError("Syft v1.55.0 unexpectedly detected a zlib or Dropbear stub")
-    if quality.get("version_string_components") != 3:
-        raise AssertionError("quality must count exactly 3 version-string components")
+    if quality.get("version_string_components") != 5:
+        raise AssertionError("quality must count exactly 5 version-string components")
     print(f"PASS actual Syft version-string inventory: before={len(baseline_components)} after={len(components)} components")
-    print("PASS BusyBox, OpenSSL and curl detection properties; dpkg and OS components unmarked; quality count=3")
-    print("PASS documented Syft v1.55.0 limit: zlib and Dropbear stubs are not recognised")
+    print("PASS BusyBox, OpenSSL, curl, zlib and Dropbear detection properties; dpkg and OS components unmarked; quality count=5")
 
     write_stub(removed_version_rootfs / "bin/busybox", b"BusyBox")
     removed_version, removed_quality = inventory(removed_version_rootfs, "removed-version")

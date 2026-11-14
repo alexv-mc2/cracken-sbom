@@ -115,7 +115,7 @@ Syft because it is separately installed.
 ## Separate engine installation
 
 Provision tools separately from the offline scan phase. Syft is not modified or
-vendored. The supported engine is **v1.54.0**, with platform archive and executable
+vendored. The supported engine is **v1.55.0**, with platform archive and executable
 hashes recorded in `engine-manifest.json`. The helpers require Python 3.8+, curl
 and cosign >=2.5. Use Git to obtain the same public source commit you reviewed
 for the release. This downloads the generator's public code, not your firmware
@@ -165,7 +165,7 @@ Certificate OIDC issuer: https://token.actions.githubusercontent.com
 Certificate identity: https://github.com/anchore/syft/.github/workflows/release.yaml@refs/heads/main
 ```
 
-Cosign verifies the v1.54.0 checksum manifest using its
+Cosign verifies the v1.55.0 checksum manifest using its
 `checksums.txt.sigstore.json` bundle. The archive SHA-256 must match both the
 authenticated manifest and the local engine manifest; extraction follows those
 checks. Scanning uses the already-provisioned binary and does not rerun the
@@ -200,6 +200,6 @@ Review `sbom.cdx.json`, `provenance.json` and `quality.json` in that output
 directory. Upload only `sbom.cdx.json`; keep the two other files locally.
 See [output review and coverage limits](../README.md#review-the-output).
 
-Sources: [Syft v1.54.0 release](https://github.com/anchore/syft/releases/tag/v1.54.0),
+Sources: [Syft v1.55.0 release](https://github.com/anchore/syft/releases/tag/v1.55.0),
 [Anchore verification](https://oss.anchore.com/docs/installation/verification/),
 [release process](RELEASE.md).

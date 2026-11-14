@@ -8,7 +8,7 @@ import (
 )
 
 func testContext() ProvenanceContext {
-	return ProvenanceContext{ToolVersion: "0.1.0", EngineVersion: "1.54.0", ConfigDigest: strings.Repeat("a", 64), TargetType: "rootfs", TargetIdentifier: "firmware-2026.10", GeneratedAt: "2026-10-04T13:14:15+02:00"}
+	return ProvenanceContext{ToolVersion: "0.1.0", EngineVersion: "1.55.0", ConfigDigest: strings.Repeat("a", 64), TargetType: "rootfs", TargetIdentifier: "firmware-2026.10", GeneratedAt: "2026-10-04T13:14:15+02:00"}
 }
 
 func encodeTest(t *testing.T, v any) []byte {
@@ -428,12 +428,12 @@ func TestNormalizeInventoryAndByteLimits(t *testing.T) {
 	if _, _, err := normalizeSBOM(encodeTest(t, testDocument(components...)), testContext()); err == nil || !strings.Contains(err.Error(), "50000") {
 		t.Fatalf("inventory limit not enforced: %v", err)
 	}
-	components = components[:12000]
+	components = components[:18000]
 	for i := range components {
 		c := testPackage(strings.Repeat("a", 1000))
 		components[i] = c
 	}
-	if _, _, err := normalizeSBOM(encodeTest(t, testDocument(components...)), testContext()); err == nil || !strings.Contains(err.Error(), "10 MiB") {
+	if _, _, err := normalizeSBOM(encodeTest(t, testDocument(components...)), testContext()); err == nil || !strings.Contains(err.Error(), "16 MiB") {
 		t.Fatalf("byte limit not enforced: %v", err)
 	}
 }

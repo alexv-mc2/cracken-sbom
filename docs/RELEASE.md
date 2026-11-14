@@ -11,7 +11,7 @@ prereleases. Tags and released assets must not be replaced after distribution.
 
 1. Run the reusable CI suite on the tagged source: Go tests, offline real-Syft
    fixtures, CycloneDX schema validation and four cross-builds.
-2. Provision Go 1.26.1 and authenticate separately installed Syft 1.54.0 with
+2. Provision Go 1.26.1 and authenticate separately installed Syft 1.55.0 with
    the pinned cosign bootstrap and the engine's signed upstream checksums.
 3. Build Linux/macOS amd64/arm64 with `CGO_ENABLED=0`, `GOTOOLCHAIN=local`,
    `GOPROXY=off`, `GOSUMDB=off`, `-trimpath`, `-buildvcs=false`, an empty build ID

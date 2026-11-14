@@ -1,20 +1,20 @@
 {
-  "version": "1.54.0",
+  "version": "1.55.0",
   "binary_sha256": {
-    "darwin_arm64": "835607cdfbdbfc59335b0beadeefc47aa6aab7d3b403c11cfa65627d92a27f61",
-    "darwin_amd64": "4ca3d1c3cc14d47df41f841524dc2b72e0e9724005cd9ce81ea1fa9591ffe451",
-    "linux_arm64": "fced89f2b5d414b189190e083d83cf7068d4befdca483c5a4e8ed225d8e9b58e",
-    "linux_amd64": "d46a9a61a6ae3d367f0a03748c5e9c59253e586c4388ab26ddcacebc2efa0d92"
+    "darwin_arm64": "55a63db797b2a060aa56c7a03991bb11084e01ed4e3863df12370d74e84b4821",
+    "darwin_amd64": "8a16b906c8533cf975d64aef9f696f6c83c858a1de8732e58e3f0b57805484e1",
+    "linux_arm64": "4f8068b25551a42991a292a42078519fdc739a97a6f6310e1dcf1367a258c1c2",
+    "linux_amd64": "64c9631c3560336c55c549df0de08cd577d02399c9de807ac390960a4ed5c351"
   },
   "archive_sha256": {
-    "darwin_arm64": "7e0bdad94c569fc6d5785c9a657bbae3d4c4e140ccb5eace3d0b5b6bc2b6dbcf",
-    "darwin_amd64": "22b71725e388a4c0de385249c4bc1044f78a870f2894f34b43ba957e792145d7",
-    "linux_arm64": "ee6d4566373a05b344bc6b5f1706f14419bf9338ba39ff686e247deefe9b8818",
-    "linux_amd64": "54a87372498168b2d033e876fd41fa4e8035b872699e525a57046e1f2f09c860"
+    "darwin_arm64": "1217c258bd5eb91ef3189cf22a82e02f9cac07e4ce934350f428e93aff674625",
+    "darwin_amd64": "e2e5831cbabaec9a36fe65c34755c1113982c842a685edce3ce0b54a0ded8003",
+    "linux_arm64": "929bd163db2d7cd2255d3bcb8967208079813d7b46b0c952f7b794d8e2c7d304",
+    "linux_amd64": "bb65249542db5fedeeb4d3f9b018b75e7264dbfbbb10486f044581a92f90490d"
   },
   "certificate_identity": "https://github.com/anchore/syft/.github/workflows/release.yaml@refs/heads/main",
   "certificate_oidc_issuer": "https://token.actions.githubusercontent.com",
-  "checksum_manifest_sha256": "e423344e663d7d14db62e51ddd31e4a5012818ed69e78358391dc487483f839c",
-  "sigstore_bundle_sha256": "6a0dbf94cb89e2fb157f022bed752b3ceb5827cb557a4a4cfb6af67f98b99811",
+  "checksum_manifest_sha256": "aba5ac8ee870bb93fd3b2058471ffe7e57492ba673b5e0bcbfca92006c2f4dc7",
+  "sigstore_bundle_sha256": "52f55787eebb09e2d24042481a16663c8f094101370bb7748a2dbaaa32ee839a",
   "cosign_min_version": "2.5.0"
 }

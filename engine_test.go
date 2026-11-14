@@ -33,7 +33,7 @@ test -z "$SYFT_CHECK_FOR_APP_UPDATE$SYFT_JAVA_USE_NETWORK$SYFT_CONFIG$GITHUB_TOK
 test "$HOME" = "$PWD" || exit 23
 test "$HTTPS_PROXY" = "http://127.0.0.1:1" || exit 24
 if [ "$1" = "version" ]; then
-  printf '{"version":"1.54.0"}'
+  printf '{"version":"1.55.0"}'
   exit 0
 fi
 test "$1" = "scan" || exit 25
@@ -71,7 +71,7 @@ func TestEngineEnforcesAuthenticatedBinaryAndExactVersion(t *testing.T) {
 
 func TestEngineCancellationAndDiagnosticsAreSafe(t *testing.T) {
 	file, manifest := mockEngine(t, `
-if [ "$1" = "version" ]; then printf '{"version":"1.54.0"}'; exit 0; fi
+if [ "$1" = "version" ]; then printf '{"version":"1.55.0"}'; exit 0; fi
 echo 'token=do-not-print /private/local/source' >&2
 exec sleep 5
 `)
@@ -96,7 +96,7 @@ func TestCappedEngineOutputNeverGrowsPastBound(t *testing.T) {
 func TestLocalArchivesUseExplicitSourceWithoutDaemon(t *testing.T) {
 	for _, targetType := range []string{"oci-archive", "docker-archive"} {
 		t.Run(targetType, func(t *testing.T) {
-			file, manifest := mockEngine(t, "if [ \"$1\" = \"version\" ]; then printf '{\"version\":\"1.54.0\"}'; exit 0; fi\n"+
+			file, manifest := mockEngine(t, "if [ \"$1\" = \"version\" ]; then printf '{\"version\":\"1.55.0\"}'; exit 0; fi\n"+
 				"test \"$2\" = '"+targetType+":/fixture.tar' || exit 1\n"+"printf '{}'\n")
 			if _, err := runEngineWithManifest(context.Background(), file, "/fixture.tar", targetType, manifest); err != nil {
 				t.Fatal(err)

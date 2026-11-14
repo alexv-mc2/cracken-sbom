@@ -14,22 +14,43 @@ guide. Their default SPDX formats differ:
 | Yocto release | Default SBOM format | Default image output directory | Upload to crAcken |
 |---|---|---|---|
 | [Scarthgap 5.0](https://docs.yoctoproject.org/5.0/dev-manual/sbom.html) | SPDX 2.2 JSON | `tmp/deploy/images/<machine>/` inside the build directory | Repack the image's SPDX document archive as ZIP using the steps below |
-| [Wrynose 6.0](https://docs.yoctoproject.org/6.0/dev-manual/sbom.html) | SPDX 3.0.1 JSON | `tmp/deploy/images/<machine>/` inside the build directory | This format is not currently supported by crAcken's SPDX upload; do not relabel it as SPDX 2.2 |
+| [Wrynose 6.0](https://docs.yoctoproject.org/6.0/dev-manual/sbom.html) | SPDX 3.0.1 JSON | `tmp/deploy/images/<machine>/` inside the build directory | Upload the single complete `*.rootfs.spdx.json` file for the image |
 
 Paths assume the default `TMPDIR` and deployment settings. Custom settings can
 move them. The filenames begin with your image name and machine; build variants
 may add a timestamp. Select the archive emitted by the build you are assessing.
 
 Wrynose's `create-spdx` class selects SPDX 3.0.1 and no longer includes the
-SPDX 2.2 class. A ZIP does not convert that format. Keep its native SBOM for
-your records. For a supported upload, you can instead run the generator on the
-[unpacked shipped root filesystem](../README.md#generate-a-rootfs-inventory).
-That scan depends on detectable package metadata and can miss components; it
-does not replace all the information in the native Yocto SBOM.
+SPDX 2.2 class. crAcken accepts one complete SPDX 3.0.0 or 3.0.1 JSON document,
+including the image's `*.rootfs.spdx.json`; SPDX 3.1 and later are not accepted.
+Do not combine multiple SPDX 3 documents or mix SPDX 2 and SPDX 3 in a ZIP.
+A ZIP does not convert between SPDX versions. Keep the native SBOM for your
+records and review it for sensitive information before uploading.
+
+A single JSON upload is limited to 10 MiB. A ZIP may contain one complete
+SPDX 3 document and is limited to 16 MiB both compressed and uncompressed.
+ZIP uploads and JSON files over 10 MiB require the large SBOM capability in
+crAcken. Check the upload result and any coverage notices.
 
 Older Yocto releases have different defaults. Use the manual for your exact
 release and check the format before uploading; do not assume that every file
 ending in `.spdx.json` uses the same SPDX model.
+
+## Converting SPDX 2.2 or 2.3 RDF, YAML or XML
+
+crAcken does not directly ingest SPDX RDF, YAML or XML. The external
+[spdx/tools-python](https://github.com/spdx/tools-python) package supplies
+`pyspdxtools` to convert SPDX 2.2 or 2.3 documents to SPDX JSON. Install it
+separately in your controlled environment, then use filenames with the
+appropriate input and output extensions, for example:
+
+```bash
+pyspdxtools -i input.spdx.yaml -o output.spdx.json
+```
+
+Review and validate the converted output before uploading. This conversion
+guidance applies to SPDX 2.2 and 2.3, not SPDX 3. CycloneDX 2.0 is not accepted
+by crAcken.
 
 ## Enable SPDX output
 

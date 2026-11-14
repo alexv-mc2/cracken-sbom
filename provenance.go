@@ -48,7 +48,7 @@ func validateContext(ctx ProvenanceContext) (ProvenanceContext, error) {
 		return ctx, errors.New("invalid configuration digest")
 	}
 	switch ctx.TargetType {
-	case "npm", "python", "rootfs", "oci-archive", "docker-archive":
+	case "dir", "npm", "python", "rootfs", "oci-archive", "docker-archive":
 	case firmwareTargetType:
 		if ctx.Firmware != nil {
 			fw, err := validateFirmware(ctx.Firmware)

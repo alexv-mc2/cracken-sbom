@@ -18,7 +18,7 @@ import (
 )
 
 const usage = "invalid flags; use generate --target-type TYPE --target PATH --target-id ID --output NEW-DIR --syft ABSOLUTE-BINARY [--allow-incomplete] [--zip] [--extractor ABSOLUTE-BINARY [--extractor-kind unblob|binwalk] [--work-dir ABSOLUTE-DIR]]; " +
-	"--zip and automatic ZIP output for SBOMs over 10 MiB are for crAcken web-app upload through SPDX JSON → ZIP archive mode"
+	"--zip or automatic ZIP for SBOMs over 10 MiB: crAcken web app's SPDX upload method (ZIP archive) or public API (application/zip)"
 
 // Release builds bind this value to their exact tag with -ldflags -X.
 var toolVersion = "1.1.0"
@@ -55,7 +55,7 @@ func parseOptions(args []string) (generateOptions, error) {
 	fs.StringVar(&o.targetID, "target-id", "", "release, commit or image digest")
 	fs.StringVar(&o.output, "output", "", "new output directory")
 	fs.StringVar(&o.syft, "syft", "", "absolute path to verified Syft binary")
-	fs.BoolVar(&o.zipOutput, "zip", false, "package the SBOM in a ZIP archive for crAcken web-app upload (SPDX JSON → ZIP archive mode)")
+	fs.BoolVar(&o.zipOutput, "zip", false, "package the SBOM as ZIP for the crAcken web app (SPDX upload method: ZIP archive) or public API (application/zip)")
 	fs.BoolVar(&o.allowIncomplete, "allow-incomplete", false, "acknowledge incomplete metadata")
 	fs.StringVar(&o.extractor, "extractor", "", "absolute path to unblob or binwalk (firmware-image only)")
 	fs.StringVar(&o.extractorKind, "extractor-kind", "", "unblob or binwalk (firmware-image only)")
@@ -247,7 +247,7 @@ func runCLI(ctx context.Context, args []string, stdout io.Writer, runner engineR
 	}
 	_, _ = fmt.Fprintf(stdout, "Generated %s, provenance.json and quality.json. Review the SBOM before manual upload; provenance remains customer-held.\n", outputName)
 	if outputName == "sbom.cdx.zip" {
-		_, _ = fmt.Fprintln(stdout, "This ZIP is for upload in the crAcken web app through SPDX JSON → ZIP archive mode; the public API and cracken-action accept one JSON document up to 10 MiB, not ZIP archives.")
+		_, _ = fmt.Fprintln(stdout, "In the crAcken web app, select ZIP archive under SPDX upload method. The public API accepts Content-Type: application/zip (16 MiB compressed and unpacked; HTTP 413 archive_too_large for compressed size or archive_unpacked_too_large for unpacked size).")
 	}
 	if o.targetType == firmwareTargetType {
 		_, _ = fmt.Fprintln(stdout, "The inventory comes from a best-effort local extraction of the image; see the firmware block in provenance.json and the warnings in quality.json.")

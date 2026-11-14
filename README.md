@@ -289,32 +289,36 @@ The CLI does not upload data or send telemetry. Generation writes the SBOM and
 sidecars to the output directory you selected. If you choose to submit an
 inventory to a service, upload only `sbom.cdx.json` or `sbom.cdx.zip`; keep
 `provenance.json` and `quality.json` in your local evidence store. Submission is
-a manual action. The generator has no automatic upload. A ZIP is for the
-crAcken web app's **SPDX JSON → ZIP archive** upload mode, including a ZIP that
-contains only CycloneDX JSON; do not select the CycloneDX file picker for a ZIP.
-ZIP upload is available to every account. The public API and `cracken-action`
-accept one JSON document up to 10 MiB and do not accept ZIP archives. A single
-JSON document larger than 10 MiB requires the large-SBOM option.
+a manual action. The generator has no automatic upload. A ZIP can be uploaded
+in the crAcken web app: under **SPDX upload method**, select **ZIP archive**.
+This includes a ZIP that contains only CycloneDX JSON; do not select the
+CycloneDX file picker for a ZIP. ZIP upload is available to every account and
+does not require the large-SBOM option. The public API's `POST /v1/sboms` also
+accepts ZIPs sent with `Content-Type: application/zip`, up to 16 MiB compressed
+and 16 MiB unpacked. Exceeding the compressed limit returns HTTP 413
+`archive_too_large`; exceeding the unpacked limit returns HTTP 413
+`archive_unpacked_too_large`. The API's single-document limit is 10 MiB; a
+single JSON document larger than 10 MiB in the web app requires the
+large-SBOM option.
 
 ## Review the output
 
 A successful output directory contains:
 
 - `sbom.cdx.json`: minimized CycloneDX 1.5 inventory, or `sbom.cdx.zip` when
-  `--zip` is selected or JSON exceeds 10 MiB; ZIP output is for web upload
-  through the **SPDX JSON → ZIP archive** mode;
+  `--zip` is selected or JSON exceeds 10 MiB; ZIP output can be uploaded
+  in the web app by selecting **ZIP archive** under **SPDX upload method**, or
+  sent to the public API as `application/zip`;
 - `provenance.json`: CLI and engine versions, resolved scan-policy digest,
   supplied target identifier, generation time, privacy profile and SHA-256 of
   the final SBOM (for firmware images also the `firmware` block described above);
 - `quality.json`: package counts and identified gaps or removals.
 
 A ZIP contains only `sbom.cdx.json`; the sidecars remain outside it. The crAcken
-web app accepts ZIPs up to 16 MiB both compressed and unpacked, through the
-**SPDX JSON → ZIP archive** mode, for every account without the large-SBOM
-option. The public API and `cracken-action` accept one JSON document up to
-10 MiB and no ZIP; a single JSON document over 10 MiB requires the large-SBOM
-option. No inventory is truncated. The provenance digest always covers the
-uncompressed JSON bytes.
+web app provides the **ZIP archive** option under **SPDX upload method** for
+every account without the large-SBOM option, and the public API accepts the ZIP
+as `application/zip` within the limits above. No inventory is truncated. The
+provenance digest always covers the uncompressed JSON bytes.
 
 Review all three files. Component names, versions, package URLs and licenses
 remain visible and may include confidential package identities. The normalizer

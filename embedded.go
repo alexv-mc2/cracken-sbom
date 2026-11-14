@@ -60,6 +60,25 @@ func embeddedBootloaderPath(path string) bool {
 	return false
 }
 
+func embeddedLooksLikeText(path string, data []byte) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".txt", ".log", ".md", ".rst", ".html", ".conf", ".cfg", ".sh":
+		return true
+	}
+	// Only sample the prefix; raw binaries may contain long printable banners.
+	data = data[:min(len(data), 8<<10)]
+	if bytes.IndexByte(data, 0) >= 0 {
+		return false
+	}
+	printable := 0
+	for _, b := range data {
+		if (b >= 0x20 && b <= 0x7e) || (b >= '\t' && b <= '\r') {
+			printable++
+		}
+	}
+	return printable*100 >= len(data)*95
+}
+
 type embeddedLimits struct {
 	maxFileBytes int64
 	timeout      time.Duration
@@ -166,8 +185,13 @@ func detectEmbedded(ctx context.Context, root string, raw []byte, limits embedde
 				if elf && !strings.Contains(base, "u-boot") {
 					continue
 				}
-				if !elf && !uboot && !embeddedBootloaderPath(rel) {
-					re = embeddedRawUBoot
+				if !elf && !uboot {
+					if embeddedLooksLikeText(rel, data) {
+						continue
+					}
+					if !embeddedBootloaderPath(rel) {
+						re = embeddedRawUBoot
+					}
 				}
 			} else if !elf || (rule.hint != "" && !strings.Contains(base, rule.hint)) {
 				continue

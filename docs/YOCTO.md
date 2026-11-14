@@ -27,14 +27,17 @@ Do not combine multiple SPDX 3 documents or mix SPDX 2 and SPDX 3 in a ZIP.
 A ZIP does not convert between SPDX versions. Keep the native SBOM for your
 records and review it for sensitive information before uploading.
 
-A single JSON document is limited to 10 MiB for the public API and
-`cracken-action`, which do not accept ZIP archives. The crAcken web app accepts
-a ZIP up to 16 MiB both compressed and uncompressed in its SPDX JSON → ZIP
-archive mode; ZIP upload is available to every account and does not require the
-large-SBOM option. This mode also accepts a ZIP containing only CycloneDX JSON;
-do not use the CycloneDX file picker for a ZIP. A single JSON document larger
-than 10 MiB requires the large-SBOM option. Check the upload result and any
-coverage notices.
+The public API limits a single JSON document to 10 MiB. ZIP archives can be
+uploaded in the crAcken web app by selecting **ZIP archive** under **SPDX
+upload method**, or sent to the public API's `POST /v1/sboms` endpoint with
+`Content-Type: application/zip`. API ZIPs are limited to 16 MiB compressed and
+16 MiB unpacked. Exceeding the compressed limit returns HTTP 413
+`archive_too_large`; exceeding the unpacked limit returns HTTP 413
+`archive_unpacked_too_large`. ZIP upload is available to every account and does
+not require the large-SBOM option. The web app's ZIP archive mode also accepts
+a ZIP containing only CycloneDX JSON; do not use the CycloneDX file picker for a
+ZIP. In the web app, a single JSON document larger than 10 MiB requires the
+large-SBOM option. Check the upload result and any coverage notices.
 
 Older Yocto releases have different defaults. Use the manual for your exact
 release and check the format before uploading; do not assume that every file

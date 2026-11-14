@@ -195,6 +195,49 @@ func TestEmbeddedRawUBoot(t *testing.T) {
 	}
 }
 
+func TestEmbeddedRawUBootBinaryCandidates(t *testing.T) {
+	const banner = "U-Boot 2024.01 (Jan 01 2024 - 12:34:56 +0000)"
+	textSample := banner + strings.Repeat(" ", (8<<10)-len(banner))
+	type testCase struct {
+		name, path, data string
+		want             bool
+	}
+	cases := []testCase{
+		{"serial console log", "boot.log", "Booting...\r\n" + banner + "\r\n", false},
+		{"readme", "README", "Example output:\n" + banner + "\n", false},
+		{"text with binary extension", "image.bin", banner + "\n", false},
+		{"text with bootloader name", "u-boot.bin", banner + "\n", false},
+		{"raw named bootloader", "u-boot.bin", "\x00" + banner + "\x00", true},
+		{"raw image", "image.bin", "\x00" + banner + "\x00", true},
+		{"95 percent printable", "image.bin", banner + strings.Repeat(" ", 190-len(banner)) + strings.Repeat("\x01", 10), false},
+		{"below 95 percent printable", "image.bin", banner + strings.Repeat(" ", 189-len(banner)) + strings.Repeat("\x01", 11), true},
+		{"whitespace is text", "README", banner + strings.Repeat("\t\n\v\f\r", 20), false},
+		{"NUL inside sample", "image.bin", textSample[:len(textSample)-1] + "\x00", true},
+		{"NUL outside sample", "image.bin", textSample + "\x00", false},
+	}
+	for _, ext := range []string{".txt", ".log", ".md", ".rst", ".html", ".conf", ".cfg", ".sh", ".LOG"} {
+		cases = append(cases, testCase{"text extension " + ext, "notes" + ext, "\x00" + banner + "\x00", false})
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, tc.path), []byte(tc.data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			_, components := embeddedInventory(t, root, []byte(emptyEmbeddedSBOM), defaultEmbeddedLimits)
+			if !tc.want {
+				if len(components) != 0 {
+					t.Fatalf("text produced components: %#v", components)
+				}
+				return
+			}
+			if len(components) != 1 || components[0]["name"] != "u-boot" || components[0]["version"] != "2024.01" {
+				t.Fatalf("raw U-Boot not recognized: %#v", components)
+			}
+		})
+	}
+}
+
 func TestEmbeddedRootfsDeterministicAndSyftDuplicate(t *testing.T) {
 	root := t.TempDir()
 	// Copy the checked-in rootfs fixture without mutating it.

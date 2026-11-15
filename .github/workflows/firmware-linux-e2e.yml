@@ -20,7 +20,7 @@ jobs:
     name: Firmware image, real unblob and sasquatch
     # Pinned like release.yml: the hashed requirements are for CPython 3.12 and the
     # `7zip` package name is specific to Ubuntu 24.04.
-    runs-on: ubuntu-24.04
+    runs-on: ubicloud-standard-2
     timeout-minutes: 30
     env:
       # OpenWrt 24.10.8, ath79 Archer C7 v2 sysupgrade image (7.0 MB, SquashFS rootfs).

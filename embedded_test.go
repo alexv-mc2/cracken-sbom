@@ -114,6 +114,40 @@ func TestEmbeddedStaticLibraries(t *testing.T) {
 	}
 }
 
+func TestEmbeddedLibraryBinaryCandidates(t *testing.T) {
+	const zlib = "deflate 1.2.13 Copyright 1995-2022 Jean-loup Gailly and Mark Adler"
+	const mbedTLS = "mbed TLS 3.5.1"
+	const wolfSSL = "wolfSSL 5.6.6"
+	for _, tc := range []struct {
+		name, path, data, wantName, wantVersion string
+	}{
+		{"ELF app with zlib", "app", "\x7fELF\x00" + zlib + "\x00", "zlib", "1.2.13"},
+		{"ELF app with mbed TLS", "app", "\x7fELF\x00" + mbedTLS + "\x00", "mbedtls", "3.5.1"},
+		{"raw binary with zlib", "app", "\x00" + zlib + "\x00", "zlib", "1.2.13"},
+		{"raw binary with mbed TLS", "app", "\x00" + mbedTLS + "\x00", "mbedtls", "3.5.1"},
+		{"raw binary with wolfSSL", "app", "\x00" + wolfSSL + "\x00", "wolfssl", "5.6.6"},
+		{"text with zlib", "app", "Library: " + zlib + "\n", "", ""},
+		{"text file with zlib", "library.log", zlib + "\n", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, tc.path), []byte(tc.data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			_, components := embeddedInventory(t, root, []byte(emptyEmbeddedSBOM), defaultEmbeddedLimits)
+			if tc.wantName == "" {
+				if len(components) != 0 {
+					t.Fatalf("text produced components: %#v", components)
+				}
+				return
+			}
+			if len(components) != 1 || components[0]["name"] != tc.wantName || components[0]["version"] != tc.wantVersion {
+				t.Fatalf("library not recognized: %#v", components)
+			}
+		})
+	}
+}
+
 func TestEmbeddedLibraryBannerFalsePositives(t *testing.T) {
 	for _, tc := range []struct{ name, path, banner string }{
 		{"zlib fragment", "usr/lib/libz.so", "deflate 1.2"},
@@ -168,7 +202,6 @@ func TestEmbeddedRawUBoot(t *testing.T) {
 		{"non-date parenthesis", "random.bin", "U-Boot 2024.01 (documentation)", 1024, false},
 		{"similar directory", "reboot/loader.bin", "U-Boot 2024.01", 1024, false},
 		{"boot text file", "boot/notes.txt", "U-Boot 2024.01", 1024, false},
-		{"raw libraries", "firmware/libraries.bin", " deflate 1.2.13 Copyright 1995-2022 Jean-loup Gailly and Mark Adler\x00mbed TLS 3.5.1\x00wolfSSL 5.6.6", 1024, false},
 		{"oversized named bootloader", "u-boot.bin", completeBanner, 16, false},
 		{"oversized complete banner", "image.bin", completeBanner, 16, false},
 	} {

@@ -18,7 +18,7 @@ import (
 )
 
 type embeddedRule struct {
-	// An empty hint allows library banners in any eligible ELF basename.
+	// An empty hint allows library banners in any binary candidate.
 	name, hint, pattern, vendor, product string
 	re                                   *regexp.Regexp
 }
@@ -193,7 +193,11 @@ func detectEmbedded(ctx context.Context, root string, raw []byte, limits embedde
 						re = embeddedRawUBoot
 					}
 				}
-			} else if !elf || (rule.hint != "" && !strings.Contains(base, rule.hint)) {
+			} else if rule.hint == "" {
+				if !elf && embeddedLooksLikeText(rel, data) {
+					continue
+				}
+			} else if !elf || !strings.Contains(base, rule.hint) {
 				continue
 			}
 			match := re.FindSubmatch(data)

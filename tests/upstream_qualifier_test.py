@@ -61,7 +61,7 @@ def main() -> None:
         errors = sorted(schema.iter_errors(document), key=lambda error: str(list(error.path)))
         if errors:
             details = "\n".join(f"{list(error.path)}: {error.message}" for error in errors)
-            raise AssertionError(f"upstream source SBOM failed CycloneDX 1.5 schema:\n{details}")
+            raise AssertionError(f"upstream source SBOM failed CycloneDX 1.6 schema:\n{details}")
         components = [
             component for component in document.get("components", [])
             if component.get("name") == PACKAGE_NAME
@@ -75,7 +75,7 @@ def main() -> None:
         expected = f"{SOURCE_NAME}@{SOURCE_VERSION}"
         if qualifiers.get("upstream") != [expected]:
             raise AssertionError("Debian upstream name@version qualifier was not retained exactly")
-        print("PASS actual Syft Debian upstream qualifier + CycloneDX 1.5 schema")
+        print("PASS actual Syft Debian upstream qualifier + CycloneDX 1.6 schema")
 
 
 if __name__ == "__main__":

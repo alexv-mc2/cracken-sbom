@@ -7,7 +7,33 @@ Syft is copyright Anchore, Inc. and contributors, licensed Apache-2.0.
 Syft is not vendored into this repository or redistributed by this package.
 https://github.com/anchore/syft/tree/v1.55.0
 
-CycloneDX specification 1.5 JSON schemas are Copyright OWASP Foundation,
+CycloneDX specification 1.6.1 JSON schemas are Copyright OWASP Foundation,
 licensed Apache-2.0. The SPDX identifier enum is embedded for runtime validation;
 the other schemas are test-only. Original license and checksums: tests/schema/.
-https://github.com/CycloneDX/specification/tree/1.5
+https://github.com/CycloneDX/specification/tree/1.6.1
+
+BSI CycloneDX Property Taxonomy v0.1.2: property names and values used in
+tr_taxonomy.go. Copyright 2024-2025 German Federal Office for Information
+Security (BSI), licensed Apache-2.0.
+https://github.com/BSI-Bund/tr-03183-cyclonedx-property-taxonomy
+
+kunnus-scanner: tr_lockfile.go adapts its npm, yarn and bun lockfile SHA-512
+extraction (internal/ecosystem/npm.go, npm_packagelock.go, npm_yarnlock.go,
+npm_bunlock.go at commit 31e1bf9dcc2c3d87de9fe00569a451d7c12bbcb0).
+Copyright the kunnus-scanner authors, licensed Apache-2.0. Changes are listed
+in the file header.
+https://github.com/think-ahead-technologies/kunnus-scanner
+
+Notices for material used by planned extensions (they apply once the files
+that use it are present):
+
+- binwalk (Copyright ReFirmLabs and contributors, MIT) and unblob (Copyright
+  ONEKEY, MIT): file-format magic numbers for local firmware detection.
+  https://github.com/ReFirmLabs/binwalk  https://github.com/onekey-sec/unblob
+- spdx3toopenvex (Copyright Joshua Watt, MIT): mapping of SPDX 3 VEX
+  relationships, used as a reference for the Yocto VEX output.
+  https://github.com/JPEWdev/spdx3toopenvex
+
+Test-only tools, downloaded by scripts/provision-*.sh with pinned SHA-256 and
+never redistributed: sbomqs v2.1.3 (Interlynk, Apache-2.0) and cyclonedx-cli
+v0.33.1 (OWASP Foundation, Apache-2.0).

@@ -18,14 +18,14 @@ for line in (folder/'SHA256SUMS').read_text().splitlines():
     if actual != expected:
         raise RuntimeError(f'Vendored schema checksum mismatch: {name}')
 resources = []
-for name in ['bom-1.5.schema.json', 'spdx.schema.json', 'jsf-0.82.schema.json']:
+for name in ['bom-1.6.schema.json', 'spdx.schema.json', 'jsf-0.82.schema.json']:
     schema = json.loads((folder/name).read_text())
     resource = Resource.from_contents(schema, default_specification=DRAFT7)
     resources += [(schema['$id'], resource), ('http://cyclonedx.org/schema/'+name, resource)]
 registry = Registry().with_resources(resources)
-schema = json.loads((folder/'bom-1.5.schema.json').read_text())
+schema = json.loads((folder/'bom-1.6.schema.json').read_text())
 validator = Draft7Validator(schema, registry=registry)
-assert not validator.is_valid({'bomFormat':'CycloneDX', 'specVersion':'1.5', 'version':1,
+assert not validator.is_valid({'bomFormat':'CycloneDX', 'specVersion':'1.6', 'version':1,
                                'components':[{'type':'library'}]}), 'Validator must reject missing name'
 documents = sorted(Path(sys.argv[1]).glob('*.cdx.json'))
 if len(documents) != 4:
@@ -35,4 +35,4 @@ for target in documents:
     errors = sorted(validator.iter_errors(document), key=lambda e: str(list(e.path)))
     if errors:
         raise RuntimeError('\n'.join(f'{target.name}: {list(e.path)}: {e.message}' for e in errors))
-    print(f'PASS official CycloneDX 1.5 schema: {target.name}')
+    print(f'PASS official CycloneDX 1.6 schema: {target.name}')

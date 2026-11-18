@@ -12,12 +12,15 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 )
 
-const usage = "invalid flags; use generate --target-type TYPE --target PATH --target-id ID --output NEW-DIR --syft ABSOLUTE-BINARY [--allow-incomplete] [--zip] [--extractor ABSOLUTE-BINARY [--extractor-kind unblob|binwalk] [--work-dir ABSOLUTE-DIR]]; " +
+const usage = "invalid flags; use generate --target-type TYPE --target PATH --target-id ID --output NEW-DIR [--syft ABSOLUTE-BINARY] [--allow-incomplete] [--zip] [--extractor ABSOLUTE-BINARY [--extractor-kind unblob|binwalk] [--work-dir ABSOLUTE-DIR]] " +
+	"[--product-name NAME --product-version VERSION --product-license SPDX-EXPRESSION] [--manufacturer-name NAME --manufacturer-email EMAIL|--manufacturer-url URL] [--metadata FILE.json] [--artifact FILE] [--conclude-licenses] [--component-contacts]; " +
 	"--zip or automatic ZIP for SBOMs over 10 MiB: crAcken web app's SPDX upload method (ZIP archive) or public API (application/zip)"
 
 // Release builds bind this value to their exact tag with -ldflags -X.
@@ -31,6 +34,19 @@ type generateOptions struct {
 	allowIncomplete, zipOutput                 bool
 	// Firmware images only: the extractor as given and as resolved, and its kind.
 	extractor, extractorGiven, extractorKind, workDir string
+	// BSI TR-03183-2 product and SBOM-creator facts asserted by the user.
+	tr trOptions
+	// Values of target-owned flags (ExtraFlag), by flag name.
+	extra map[string]string
+}
+
+// Flags parsed by generate itself; extensions may not reuse these names.
+var builtinFlagNames = map[string]bool{
+	"target-type": true, "target": true, "target-id": true, "output": true, "syft": true,
+	"zip": true, "allow-incomplete": true, "extractor": true, "extractor-kind": true, "work-dir": true,
+	"product-name": true, "product-version": true, "product-license": true,
+	"manufacturer-name": true, "manufacturer-email": true, "manufacturer-url": true,
+	"metadata": true, "artifact": true, "conclude-licenses": true, "component-contacts": true,
 }
 
 func main() {
@@ -46,8 +62,15 @@ func signalContext(parent context.Context) (context.Context, context.CancelFunc)
 	return signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 }
 
+func joinChoices(values []string) string {
+	if len(values) < 2 {
+		return strings.Join(values, "")
+	}
+	return strings.Join(values[:len(values)-1], ", ") + " or " + values[len(values)-1]
+}
+
 func parseOptions(args []string) (generateOptions, error) {
-	var o generateOptions
+	o := generateOptions{extra: map[string]string{}}
 	fs := flag.NewFlagSet("generate", flag.ContinueOnError)
 	fs.SetOutput(io.Discard) // flag errors otherwise echo supplied values.
 	fs.StringVar(&o.targetType, "target-type", "", "local target type")
@@ -60,27 +83,59 @@ func parseOptions(args []string) (generateOptions, error) {
 	fs.StringVar(&o.extractor, "extractor", "", "absolute path to unblob or binwalk (firmware-image only)")
 	fs.StringVar(&o.extractorKind, "extractor-kind", "", "unblob or binwalk (firmware-image only)")
 	fs.StringVar(&o.workDir, "work-dir", "", "absolute directory for the private extraction folder (firmware-image only)")
+	bindTRFlags(fs, &o.tr)
+	extraFlags := defaultRegistry.allExtraFlags()
+	extraBool := map[string]*bool{}
+	extraString := map[string]*string{}
+	for name, e := range extraFlags {
+		if e.Flag.Bool {
+			extraBool[name] = fs.Bool(name, false, e.Flag.Usage)
+		} else {
+			extraString[name] = fs.String(name, "", e.Flag.Usage)
+		}
+	}
 	if fs.Parse(args) != nil || fs.NArg() != 0 {
 		return o, errors.New(usage)
+	}
+	var extraErr error
+	fs.Visit(func(f *flag.Flag) {
+		e, ok := extraFlags[f.Name]
+		if !ok {
+			return
+		}
+		if e.Owner != o.targetType {
+			extraErr = fmt.Errorf("--%s is only valid with --target-type %s", f.Name, e.Owner)
+			return
+		}
+		if p := extraBool[f.Name]; p != nil {
+			o.extra[f.Name] = strconv.FormatBool(*p)
+		} else {
+			o.extra[f.Name] = *extraString[f.Name]
+		}
+	})
+	if extraErr != nil {
+		return o, extraErr
+	}
+	if o.syft == "" {
+		for _, locate := range defaultRegistry.engineLocators() {
+			if path, ok := locate(); ok {
+				o.syft = path
+				break
+			}
+		}
 	}
 	if o.target == "" || o.targetID == "" || o.output == "" || !filepath.IsAbs(o.syft) {
 		return o, errors.New("required flags are missing or engine path is not absolute")
 	}
-	switch o.targetType {
-	case "dir", "rootfs", "npm", "python", "oci-archive", "docker-archive":
-		if o.extractor != "" || o.extractorKind != "" || o.workDir != "" {
-			return o, errors.New("--extractor, --extractor-kind and --work-dir are only valid with --target-type firmware-image")
-		}
-	case firmwareTargetType:
-		if !filepath.IsAbs(o.extractor) {
-			return o, errors.New("firmware-image requires --extractor with an absolute path to unblob or binwalk")
-		}
-		o.extractorGiven = o.extractor
-		if o.workDir != "" && !filepath.IsAbs(o.workDir) {
-			return o, errors.New("--work-dir must be an absolute path")
-		}
-	default:
-		return o, errors.New("target type must be dir, rootfs, npm, python, oci-archive, docker-archive or firmware-image")
+	handler, ok := defaultRegistry.target(o.targetType)
+	if !ok {
+		return o, errors.New("target type must be " + joinChoices(defaultRegistry.targetTypes()))
+	}
+	if o.targetType != firmwareTargetType && (o.extractor != "" || o.extractorKind != "" || o.workDir != "") {
+		return o, errors.New("--extractor, --extractor-kind and --work-dir are only valid with --target-type firmware-image")
+	}
+	if err := handler.CheckOptions(&o); err != nil {
+		return o, err
 	}
 	return o, nil
 }
@@ -110,7 +165,11 @@ func validatePaths(o *generateOptions) error {
 	if err != nil {
 		return err
 	}
-	wantDir := o.targetType == "dir" || o.targetType == "rootfs" || o.targetType == "npm" || o.targetType == "python"
+	handler, ok := defaultRegistry.target(o.targetType)
+	if !ok {
+		return errors.New("unsupported target type")
+	}
+	wantDir := handler.Kind() == TargetDirectory
 	if (wantDir && !info.IsDir()) || (!wantDir && !info.Mode().IsRegular()) {
 		return errors.New("target filesystem type does not match declared target type")
 	}
@@ -140,129 +199,25 @@ func validatePaths(o *generateOptions) error {
 	if wantDir && err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return errors.New("output directory must be outside the scanned target")
 	}
-	if o.targetType == firmwareTargetType {
-		// Package managers such as pipx expose the extractor through a symbolic
-		// link, so the link is resolved here instead of being rejected.
-		extractor, err := filepath.EvalSymlinks(o.extractor)
-		if err != nil {
-			return errors.New("cannot resolve the extractor")
-		}
-		extractorInfo, err := os.Stat(extractor)
-		if err != nil || !extractorInfo.Mode().IsRegular() || extractorInfo.Mode()&0111 == 0 {
-			return errors.New("extractor must be an existing regular executable")
-		}
-		o.extractor = extractor
-		if o.workDir != "" {
-			work, err := filepath.EvalSymlinks(o.workDir)
-			if err != nil {
-				return errors.New("--work-dir must be an existing local directory")
-			}
-			workInfo, err := os.Stat(work)
-			if err != nil || !workInfo.IsDir() {
-				return errors.New("--work-dir must be an existing local directory")
-			}
-			o.workDir = work
-		}
-	}
 	o.target, o.syft, o.output = target, engine, out
-	return nil
+	return handler.ResolvePaths(o)
 }
 
 func runCLI(ctx context.Context, args []string, stdout io.Writer, runner engineRunner, now func() time.Time) error {
 	if err := contextError(ctx); err != nil {
 		return err
 	}
-	if len(args) == 1 && args[0] == "version" {
-		_, err := fmt.Fprintf(stdout, "cracken-sbom %s (Syft %s)\n", toolVersion, engineVersion)
-		return err
-	}
-	if len(args) == 0 || args[0] != "generate" {
-		return errors.New("use version or " + strings.TrimPrefix(usage, "invalid flags; use "))
-	}
-	o, err := parseOptions(args[1:])
-	if err != nil {
-		return err
-	}
-	if err = validatePaths(&o); err != nil {
-		return err
-	}
-	provenanceCtx := ProvenanceContext{
-		ToolVersion: toolVersion, EngineVersion: engineVersion,
-		ConfigDigest: configurationDigest(o.targetType), TargetType: o.targetType,
-		TargetIdentifier: o.targetID, GeneratedAt: now().UTC().Format(time.RFC3339),
-	}
-	// Validate asserted provenance before spending time scanning or reading input.
-	if _, err := validateContext(provenanceCtx); err != nil {
-		return errors.New("target identifier or provenance metadata is invalid")
-	}
-	scanTarget, scanType := o.target, o.targetType
-	if o.targetType == firmwareTargetType {
-		root, firmware, cleanup, err := extractFirmware(ctx, o, now)
-		defer cleanup()
-		if err != nil {
-			return err
+	env := Env{Engine: engines{scan: runner, convert: runConvert}, Now: now, Stdout: stdout}
+	if len(args) == 0 {
+		if command, ok := defaultRegistry.defaultSubcommand(); ok {
+			return command.Run(ctx, nil, env)
 		}
-		// The extracted tree goes through the unchanged rootfs flow.
-		provenanceCtx.Firmware = firmware
-		scanTarget, scanType = root, "rootfs"
+	} else if command, ok := defaultRegistry.subcommand(args[0]); ok {
+		return command.Run(ctx, args[1:], env)
 	}
-	raw, err := runner(ctx, o.syft, scanTarget, scanType)
-	if err != nil {
-		return err
-	}
-	if err := contextError(ctx); err != nil {
-		return err
-	}
-	if scanType == "rootfs" {
-		raw, err = detectEmbedded(ctx, scanTarget, raw, defaultEmbeddedLimits)
-		if err != nil {
-			return err
-		}
-	}
-	sbom, quality, err := normalizeSBOM(raw, provenanceCtx)
-	if err != nil {
-		return err
-	}
-	if err := contextError(ctx); err != nil {
-		return err
-	}
-	if len(sbom) > maxZipBytes {
-		return errors.New("minimized SBOM exceeds the 16 MiB uncompressed ZIP limit; inventory was not truncated")
-	}
-	if quality.MissingVersions > 0 && !o.allowIncomplete {
-		return fmt.Errorf("inventory requires acknowledgement: %d packages, %d missing versions. Inspect the target and explicitly use --allow-incomplete", quality.EmittedComponents, quality.MissingVersions)
-	}
-	provenance, err := createProvenance(sbom, provenanceCtx, quality)
-	if err != nil {
-		return err
-	}
-	qualityJSON, err := json.MarshalIndent(quality, "", "  ")
-	if err != nil {
-		return errors.New("cannot serialize quality summary")
-	}
-	outputName, outputBytes := "sbom.cdx.json", sbom
-	if o.zipOutput || len(sbom) > maxUploadBytes {
-		outputName = "sbom.cdx.zip"
-		outputBytes, err = zipSBOM(sbom)
-		if err != nil {
-			return err
-		}
-	}
-	if err := publishNamedOutputs(ctx, o.output, outputName, outputBytes, provenance, append(qualityJSON, '\n')); err != nil {
-		return err
-	}
-	_, _ = fmt.Fprintf(stdout, "Generated %s, provenance.json and quality.json. Review the SBOM before manual upload; provenance remains customer-held.\n", outputName)
-	if outputName == "sbom.cdx.zip" {
-		_, _ = fmt.Fprintln(stdout, "In the crAcken web app, select ZIP archive under SPDX upload method. The public API accepts Content-Type: application/zip (16 MiB compressed and unpacked; HTTP 413 archive_too_large for compressed size or archive_unpacked_too_large for unpacked size).")
-	}
-	if o.targetType == firmwareTargetType {
-		_, _ = fmt.Fprintln(stdout, "The inventory comes from a best-effort local extraction of the image; see the firmware block in provenance.json and the warnings in quality.json.")
-	}
-	return nil
+	return errors.New("use " + joinChoices(defaultRegistry.subcommandNames()) + "; " + strings.TrimPrefix(usage, "invalid flags; use "))
 }
 
-// Build all files privately, then reserve a new destination exclusively and
-// atomically replace only that reservation. No existing directory is replaced.
 func contextError(ctx context.Context) error {
 	if ctx.Err() != nil {
 		return errors.New("generation cancelled")
@@ -296,13 +251,37 @@ func publishOutputs(ctx context.Context, output string, sbom, provenance, qualit
 	return publishNamedOutputs(ctx, output, "sbom.cdx.json", sbom, provenance, quality)
 }
 
-func publishNamedOutputs(ctx context.Context, output, name string, sbom, provenance, quality []byte) error {
+var sidecarNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}\.json$`)
+
+// validSidecars rejects names that could collide with the core outputs or
+// leave the output directory.
+func validSidecars(name string, sidecars []OutputFile) error {
+	seen := map[string]bool{name: true, "provenance.json": true, "quality.json": true, "sbom.cdx.json": true, "sbom.cdx.zip": true}
+	for _, s := range sidecars {
+		if !sidecarNamePattern.MatchString(s.Name) || seen[s.Name] || !json.Valid(s.Data) {
+			return errors.New("invalid extra output file")
+		}
+		seen[s.Name] = true
+	}
+	return nil
+}
+
+// Build all files privately, then reserve a new destination exclusively and
+// atomically replace only that reservation. No existing directory is replaced.
+func publishNamedOutputs(ctx context.Context, output, name string, sbom, provenance, quality []byte, sidecars ...OutputFile) error {
+	if err := validSidecars(name, sidecars); err != nil {
+		return err
+	}
+	files := map[string][]byte{name: sbom, "provenance.json": provenance, "quality.json": quality}
+	for _, s := range sidecars {
+		files[s.Name] = s.Data
+	}
 	stage, err := os.MkdirTemp(filepath.Dir(output), ".cracken-sbom-output-")
 	if err != nil {
 		return errors.New("cannot create private output workspace")
 	}
 	defer os.RemoveAll(stage)
-	for name, data := range map[string][]byte{name: sbom, "provenance.json": provenance, "quality.json": quality} {
+	for name, data := range files {
 		if err := contextError(ctx); err != nil {
 			return err
 		}

@@ -29,15 +29,19 @@ jobs:
           scripts/provision-cosign.sh "$RUNNER_TEMP/cosign"
           COSIGN="$RUNNER_TEMP/cosign" SYFT_CACHE="$RUNNER_TEMP/syft-cache" \
             scripts/provision-syft.sh "$RUNNER_TEMP/syft"
+          # BSI TR-03183-2 v2.1 checks and an independent CycloneDX 1.6 validator.
+          scripts/provision-sbomqs.sh "$RUNNER_TEMP/sbomqs"
+          scripts/provision-cyclonedx-cli.sh "$RUNNER_TEMP/cyclonedx"
           python3 -m venv "$RUNNER_TEMP/schema-venv"
           "$RUNNER_TEMP/schema-venv/bin/pip" install --require-hashes --only-binary=:all: \
             -r tests/requirements.txt
-      - name: Test real Syft fixtures without network
+      - name: Test real Syft fixtures, TR-03183-2 values, cyclonedx-cli and sbomqs without network
         run: |
           set -euo pipefail
           sudo env "PATH=$PATH" "HOME=$HOME" \
             "GO=$(command -v go)" "SYFT=$RUNNER_TEMP/syft" \
             "PYTHON=$RUNNER_TEMP/schema-venv/bin/python" \
+            "SBOMQS=$RUNNER_TEMP/sbomqs" "CYCLONEDX_CLI=$RUNNER_TEMP/cyclonedx" \
             "CRACKEN_SBOM_TEST_OUTPUT=$RUNNER_TEMP/cracken-sbom-output" \
             unshare --net bash tests/run-tests.sh
       - name: Cross-build supported targets without network

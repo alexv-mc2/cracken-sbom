@@ -23,7 +23,7 @@ var embeddedCases = []struct{ name, path, version, banner string }{
 	{"wolfssl", "usr/lib/libwolfssl.so", "5.6.6", "wolfSSL 5.6.6"},
 }
 
-const emptyEmbeddedSBOM = `{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]}`
+const emptyEmbeddedSBOM = `{"bomFormat":"CycloneDX","specVersion":"1.6","components":[]}`
 
 func embeddedStub(t *testing.T, root, path, banner string) {
 	t.Helper()
@@ -298,7 +298,7 @@ func TestEmbeddedRootfsDeterministicAndSyftDuplicate(t *testing.T) {
 	for _, tc := range embeddedCases {
 		embeddedStub(t, root, tc.path, tc.banner)
 	}
-	raw := []byte(`{"bomFormat":"CycloneDX","specVersion":"1.5","components":[{"type":"application","name":"dropbear","version":"2022.83","bom-ref":"syft-dropbear","properties":[{"name":"syft:location:0:path","value":"/usr/sbin/dropbear"}]}]}`)
+	raw := []byte(`{"bomFormat":"CycloneDX","specVersion":"1.6","components":[{"type":"application","name":"dropbear","version":"2022.83","bom-ref":"syft-dropbear","properties":[{"name":"syft:location:0:path","value":"/usr/sbin/dropbear"}]}]}`)
 	limits := embeddedLimits{maxFileBytes: 1 << 20, timeout: 5 * time.Second}
 	first, components := embeddedInventory(t, root, raw, limits)
 	second, _ := embeddedInventory(t, root, raw, limits)

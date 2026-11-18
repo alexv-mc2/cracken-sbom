@@ -20,14 +20,14 @@ func encodeTest(t *testing.T, v any) []byte {
 	return b
 }
 func testDocument(components ...any) map[string]any {
-	return map[string]any{"bomFormat": "CycloneDX", "specVersion": "1.5", "components": components}
+	return map[string]any{"bomFormat": "CycloneDX", "specVersion": "1.6", "components": components}
 }
 func testPackage(name string) map[string]any {
 	return map[string]any{"type": "library", "name": name, "version": "1.2.3", "licenses": []any{map[string]any{"license": map[string]any{"id": "MIT"}}}}
 }
 
 func TestNormalizeEmptyEngineDocumentWithoutComponents(t *testing.T) {
-	input := []byte(`{"bomFormat":"CycloneDX","specVersion":"1.5","version":1}`)
+	input := []byte(`{"bomFormat":"CycloneDX","specVersion":"1.6","version":1}`)
 	output, _, err := normalizeSBOM(input, testContext())
 	if err == nil || !strings.Contains(err.Error(), "empty_sbom") || output != nil {
 		t.Fatal("valid empty engine document must fail as empty_sbom")
@@ -50,7 +50,7 @@ func TestNormalizeMixedLicenseChoicesDisclosesEveryOmission(t *testing.T) {
 }
 
 func TestNormalizePreservesNewerSPDXIDsOutsideOutputSchemaAsExpressions(t *testing.T) {
-	for _, id := range []string{"Unicode-3.0", "FSL-1.1-MIT", "BSD-3-Clause-OpenWebUI"} {
+	for _, id := range []string{"X11-swapped", "FSL-1.1-MIT", "BSD-3-Clause-OpenWebUI"} {
 		c := testPackage("licensed-package")
 		c["licenses"] = []any{map[string]any{"license": map[string]string{"id": id}}}
 		out, quality, err := normalizeSBOM(encodeTest(t, testDocument(c)), testContext())
@@ -83,7 +83,7 @@ func TestNormalizeKeepsCycloneDXLicenseChoicesSchemaCompatible(t *testing.T) {
 		{
 			name: "multiple newer identifiers are omitted",
 			choices: []any{
-				map[string]any{"license": map[string]string{"id": "Unicode-3.0"}},
+				map[string]any{"license": map[string]string{"id": "X11-swapped"}},
 				map[string]any{"license": map[string]string{"id": "FSL-1.1-MIT"}},
 			},
 			convertedIDs: 0, omittedChoices: 2, missingLicenses: 1,
@@ -100,7 +100,7 @@ func TestNormalizeKeepsCycloneDXLicenseChoicesSchemaCompatible(t *testing.T) {
 			name: "known license survives newer identifier",
 			choices: []any{
 				map[string]any{"license": map[string]string{"id": "MIT"}},
-				map[string]any{"license": map[string]string{"id": "Unicode-3.0"}},
+				map[string]any{"license": map[string]string{"id": "X11-swapped"}},
 			},
 			wantLicenses: []any{map[string]any{"license": map[string]any{"id": "MIT"}}},
 			convertedIDs: 0, omittedChoices: 1, missingLicenses: 0,
@@ -242,7 +242,7 @@ func TestNormalizePreservesLicenseExpressionAndUnknownVersion(t *testing.T) {
 }
 
 func TestNormalizeRejectsMalformedAndSecrets(t *testing.T) {
-	cases := map[string][]byte{"json": []byte("{"), "trailing": []byte(`{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]} {}`), "empty": encodeTest(t, testDocument()), "unsupported": []byte(`{"bomFormat":"CycloneDX","specVersion":"1.6","components":[]}`), "bad_inventory": []byte(`{"bomFormat":"CycloneDX","specVersion":"1.5","components":{}}`)}
+	cases := map[string][]byte{"json": []byte("{"), "trailing": []byte(`{"bomFormat":"CycloneDX","specVersion":"1.6","components":[]} {}`), "empty": encodeTest(t, testDocument()), "unsupported": []byte(`{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]}`), "unsupported_newer": []byte(`{"bomFormat":"CycloneDX","specVersion":"1.7","components":[]}`), "bad_inventory": []byte(`{"bomFormat":"CycloneDX","specVersion":"1.6","components":{}}`)}
 	for _, field := range []string{"name", "group", "version", "cpe"} {
 		c := testPackage("good")
 		c[field] = "https://user:token-canary@host.invalid/path"

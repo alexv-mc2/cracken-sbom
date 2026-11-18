@@ -1,0 +1,4 @@
+{
+  "product": {"name": "cracken-tr-fixture-product", "version": "2.0.0", "license": "Apache-2.0"},
+  "manufacturer": {"name": "Example Manufacturer GmbH", "url": "https://example.com/security"}
+}

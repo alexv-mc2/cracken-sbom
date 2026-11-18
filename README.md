@@ -3,8 +3,11 @@
 Generate a software inventory locally from package metadata and image archives.
 The primary use case is an unpacked firmware root filesystem; a binary firmware
 image can be unpacked locally first (see [Firmware images](#firmware-images)). The tool wraps
-unmodified Syft v1.55.0 and writes minimized CycloneDX JSON 1.5 with local
-provenance and quality sidecars.
+unmodified Syft v1.55.0 and writes minimized CycloneDX JSON 1.6 with local
+provenance and quality sidecars. The SBOM is laid out for
+[BSI TR-03183-2 v2.1.0](docs/TR-03183-2.md): product root, SBOM creator,
+SHA-512 hashes, BSI taxonomy properties, dependencies and completeness.
+Fields the tool cannot know are listed as `tr_gaps` in `quality.json`.
 
 The output reflects metadata available to the selected catalogers. Custom
 binaries and software without package metadata may be absent. Some stripped
@@ -12,6 +15,9 @@ or statically linked programs are
 [recognised by version strings](#components-recognised-by-version-strings).
 Scan the shipped artifact and review the quality file. An inventory does not
 establish completeness, absence of vulnerabilities or regulatory conformity.
+
+<!-- where-to-start:begin -->
+<!-- where-to-start:end -->
 
 ## How it works and why your code stays with you
 
@@ -109,6 +115,41 @@ be new; existing output is not overwritten.
 Ctrl-C cancels generation and cleans temporary engine and staging files before
 the process exits.
 
+### BSI TR-03183-2 facts you assert
+
+Some facts required by BSI TR-03183-2 v2.1.0 exist only with you, the
+manufacturer. Pass them as flags, or in a JSON file with `--metadata`
+(flags win over the file):
+
+```sh
+./cracken-sbom generate \
+  --target-type rootfs --target /work/firmware/rootfs \
+  --target-id firmware-2026.10.04 \
+  --syft /opt/verified-tools/syft \
+  --output /work/evidence/firmware-2026.10.04 \
+  --product-name example-router --product-version 2026.10.04 \
+  --product-license LicenseRef-example-proprietary \
+  --manufacturer-name "Example GmbH" --manufacturer-email psirt@example.com \
+  --artifact /work/firmware/example-router-2026.10.04.img
+```
+
+```json
+{"product": {"name": "example-router", "version": "2026.10.04", "license": "LicenseRef-example-proprietary"},
+ "manufacturer": {"name": "Example GmbH", "email": "psirt@example.com", "url": "https://example.com/security"}}
+```
+
+| Flag | TR-03183-2 field |
+|---|---|
+| `--manufacturer-email` or `--manufacturer-url` (+ `--manufacturer-name`) | Creator of the SBOM (§5.2.1), also the product's creator |
+| `--product-name`, `--product-version` | Primary component (§3.2.1). Defaults: npm lockfile project, else the target's name and `--target-id` |
+| `--product-license` | Distribution licence of the product, written as `concluded` |
+| `--artifact` | SHA-512 and file name of the deployable product file for directory targets; archive and firmware targets use the target file itself |
+| `--conclude-licenses` | Writes detected component licences as `concluded` instead of `declared`. Use it only if you have concluded them; it is your statement |
+| `--component-contacts` | Keeps the e-mail and URL of component creators from package metadata (off by default) |
+
+What the tool fills in itself and what it never claims is described in
+[docs/TR-03183-2.md](docs/TR-03183-2.md).
+
 Other local targets use the same command with these arguments:
 
 | `--target-type` | Local `--target` | Meaning |
@@ -121,10 +162,9 @@ Other local targets use the same command with these arguments:
 | `rootfs` | Unpacked filesystem root with package metadata | Preferred firmware artifact scenario |
 | `firmware-image` | Binary firmware image file (needs `--extractor`) | Unpacked locally first; see [Firmware images](#firmware-images) |
 
-For [Yocto Project](https://www.yoctoproject.org/) builds, use the native SPDX
-output from the build. The [Yocto guide](docs/YOCTO.md) explains how to enable
-it, where each release puts the files and how to prepare a ZIP for upload.
-This tool does not provide a Yocto adapter or conversion.
+For [Yocto Project](https://www.yoctoproject.org/) builds, start from the
+native SPDX output of the build. The [Yocto guide](docs/YOCTO.md) explains how
+to enable it, where each release puts the files and how to prepare them.
 
 ## Firmware images
 
@@ -306,14 +346,20 @@ large-SBOM option.
 
 A successful output directory contains:
 
-- `sbom.cdx.json`: minimized CycloneDX 1.5 inventory, or `sbom.cdx.zip` when
+- `sbom.cdx.json`: minimized CycloneDX 1.6 inventory, or `sbom.cdx.zip` when
   `--zip` is selected or JSON exceeds 10 MiB; ZIP output can be uploaded
   in the web app by selecting **ZIP archive** under **SPDX upload method**, or
   sent to the public API as `application/zip`;
 - `provenance.json`: CLI and engine versions, resolved scan-policy digest,
   supplied target identifier, generation time, privacy profile and SHA-256 of
   the final SBOM (for firmware images also the `firmware` block described above);
-- `quality.json`: package counts and identified gaps or removals.
+- `quality.json`: package counts, identified gaps or removals, and `tr_gaps`
+  (BSI TR-03183-2 fields that could not be filled).
+
+Some target types also write a separate file next to these, for example a
+CycloneDX VEX file. It is listed with its SHA-256 in `provenance.json`
+(`extra_outputs`) and is never part of the SBOM: TR-03183-2 §3.1 forbids
+vulnerability information in an SBOM.
 
 A ZIP contains only `sbom.cdx.json`; the sidecars remain outside it. The crAcken
 web app provides the **ZIP archive** option under **SPDX upload method** for
@@ -324,7 +370,11 @@ provenance digest always covers the uncompressed JSON bytes.
 Review all three files. Component names, versions, package URLs and licenses
 remain visible and may include confidential package identities. The normalizer
 excludes arbitrary properties, source/file lists, location evidence, contacts
-and nested originals. Local scan paths and full raw Syft output are not included.
+(unless `--component-contacts` is given) and nested originals. Local scan paths
+and full raw Syft output are not included. SHA-512 hashes come from npm, yarn
+and bun lockfiles and from cataloged binary files inside the target; a
+download URL is kept only for the public npm registry, otherwise only the file
+name is recorded.
 
 Compare the exact final JSON bytes to the recorded digest locally (extract the JSON first for a ZIP):
 
@@ -349,8 +399,8 @@ review. Do not use `--allow-incomplete` to hide an empty or oversized inventory.
 
 Named or free-text license choices are omitted with an explicit quality
 warning, even when another SPDX identifier survives. Safe license IDs outside
-the pinned CycloneDX 1.5 enumeration are preserved as a sole license expression
-with a warning. CycloneDX 1.5 cannot mix expressions with other license
+the pinned CycloneDX 1.6 enumeration are preserved as a sole license expression
+with a warning. CycloneDX 1.6 cannot mix expressions with other license
 choices: incompatible expressions are omitted with a warning and an
 `omitted_license_choices` count, while valid ID choices remain. No AND/OR
 operator is invented. The schema is unchanged; this representation does not
@@ -359,8 +409,13 @@ prevent a versioned inventory from being generated.
 
 ## Tests
 
-The test suite needs [Go](https://go.dev/doc/install), Syft and Python dependencies pinned in
-`tests/requirements.txt`. Create a virtual environment and install the pinned
+The test suite needs [Go](https://go.dev/doc/install), Syft, Python dependencies pinned in
+`tests/requirements.txt`, [sbomqs](https://github.com/interlynk-io/sbomqs) v2.1.3
+and [cyclonedx-cli](https://github.com/CycloneDX/cyclonedx-cli) v0.33.1. The
+last two are test tools only and are installed with
+`scripts/provision-sbomqs.sh /tmp/tools/sbomqs` and
+`scripts/provision-cyclonedx-cli.sh /tmp/tools/cyclonedx`, which check pinned
+SHA-256 digests. Create a virtual environment and install the pinned
 test dependencies:
 
 ```sh
@@ -375,6 +430,7 @@ Then run the suite from the repository root:
 GO=/opt/verified-tools/go/bin/go \
 SYFT=/opt/verified-tools/syft \
 PYTHON=/tmp/cracken-sbom-test-venv/bin/python \
+SBOMQS=/tmp/tools/sbomqs CYCLONEDX_CLI=/tmp/tools/cyclonedx \
 CRACKEN_SBOM_TEST_OUTPUT=/tmp/cracken-sbom-test-output \
 ./tests/run-tests.sh
 ```
@@ -385,8 +441,10 @@ The `firmware-image` test uses `tests/fake-extractor.sh`, a stand-in that
 are not installed by the suite. Their real behavior on Linux is checked by the
 separate CI job and script described in [Firmware images](#firmware-images);
 on other systems check it by hand with the command shown there.
-They validate package identities, privacy behavior, output digests and the
-CycloneDX schema. Fixtures do not install packages, pull images or contact a
+They validate package identities, privacy behavior, output digests, the
+CycloneDX 1.6 schema (vendored schema and cyclonedx-cli), the BSI taxonomy
+values (`tests/tr_check.py`) and the sbomqs `--bsi-v21` SBOM-level checks
+(`tests/sbomqs_check.py`). Fixtures do not install packages, pull images or contact a
 database.
 
 The [GitHub Actions example](examples/github-actions.yml) runs the CLI on a

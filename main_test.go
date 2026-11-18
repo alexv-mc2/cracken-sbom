@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-const validRawSBOM = `{"bomFormat":"CycloneDX","specVersion":"1.5","version":1,"components":[{"type":"library","name":"openssl","version":"3.0.1","purl":"pkg:generic/openssl@3.0.1","licenses":[{"license":{"id":"Apache-2.0"}}]}]}`
+const validRawSBOM = `{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,"components":[{"type":"library","name":"openssl","version":"3.0.1","purl":"pkg:generic/openssl@3.0.1","licenses":[{"license":{"id":"Apache-2.0"}}]}]}`
 
 func cliFixture(t *testing.T) (args []string, output string) {
 	t.Helper()
@@ -66,7 +66,7 @@ func TestCLIPublishesExactDigestAndPrivateOutputs(t *testing.T) {
 func TestCLIIncompleteRequiresAcknowledgementAndNeverPublishesOnFailure(t *testing.T) {
 	args, output := cliFixture(t)
 	runner := func(context.Context, string, string, string) ([]byte, error) {
-		return []byte(`{"bomFormat":"CycloneDX","specVersion":"1.5","components":[{"type":"library","name":"versionless"}]}`), nil
+		return []byte(`{"bomFormat":"CycloneDX","specVersion":"1.6","components":[{"type":"library","name":"versionless"}]}`), nil
 	}
 	if err := runCLI(context.Background(), args, &bytes.Buffer{}, runner, fixedNow); err == nil {
 		t.Fatal("missing version was accepted without acknowledgement")
@@ -83,7 +83,7 @@ func TestCLIIncompleteRequiresAcknowledgementAndNeverPublishesOnFailure(t *testi
 func TestCLIMixedLicenseChoicesAreAdvisory(t *testing.T) {
 	args, output := cliFixture(t)
 	runner := func(context.Context, string, string, string) ([]byte, error) {
-		return []byte(`{"bomFormat":"CycloneDX","specVersion":"1.5","components":[{"type":"library","name":"licensed","version":"1.0","licenses":[{"license":{"id":"MIT"}},{"license":{"name":"Proprietary"}}]}]}`), nil
+		return []byte(`{"bomFormat":"CycloneDX","specVersion":"1.6","components":[{"type":"library","name":"licensed","version":"1.0","licenses":[{"license":{"id":"MIT"}},{"license":{"name":"Proprietary"}}]}]}`), nil
 	}
 	if err := runCLI(context.Background(), args, &bytes.Buffer{}, runner, fixedNow); err != nil {
 		t.Fatal(err)
@@ -97,7 +97,7 @@ func TestCLIMixedLicenseChoicesAreAdvisory(t *testing.T) {
 func TestCLIMissingLicenseCoverageIsAdvisory(t *testing.T) {
 	args, output := cliFixture(t)
 	runner := func(context.Context, string, string, string) ([]byte, error) {
-		return []byte(`{"bomFormat":"CycloneDX","specVersion":"1.5","components":[{"type":"library","name":"unlicensed","version":"1.0"}]}`), nil
+		return []byte(`{"bomFormat":"CycloneDX","specVersion":"1.6","components":[{"type":"library","name":"unlicensed","version":"1.0"}]}`), nil
 	}
 	if err := runCLI(context.Background(), args, &bytes.Buffer{}, runner, fixedNow); err != nil {
 		t.Fatal(err)
@@ -111,7 +111,7 @@ func TestCLIMissingLicenseCoverageIsAdvisory(t *testing.T) {
 func TestCLIPreservesNewerSPDXIdentifierAsExpression(t *testing.T) {
 	args, output := cliFixture(t)
 	runner := func(context.Context, string, string, string) ([]byte, error) {
-		return []byte(`{"bomFormat":"CycloneDX","specVersion":"1.5","components":[{"type":"library","name":"licensed","version":"1.0","licenses":[{"license":{"id":"Unicode-3.0"}}]}]}`), nil
+		return []byte(`{"bomFormat":"CycloneDX","specVersion":"1.6","components":[{"type":"library","name":"licensed","version":"1.0","licenses":[{"license":{"id":"X11-swapped"}}]}]}`), nil
 	}
 	if err := runCLI(context.Background(), args, &bytes.Buffer{}, runner, fixedNow); err != nil {
 		t.Fatal(err)
@@ -132,7 +132,7 @@ func TestCLIPreservesNewerSPDXIdentifierAsExpression(t *testing.T) {
 	}
 	licenseEntry, ok := licenses[0].(map[string]any)
 	_, hasLicense := licenseEntry["license"]
-	if !ok || hasLicense || licenseEntry["expression"] != "Unicode-3.0" {
+	if !ok || hasLicense || licenseEntry["expression"] != "X11-swapped" {
 		t.Fatal("newer SPDX identifier was not retained as an expression")
 	}
 }
@@ -311,7 +311,7 @@ func TestCLIEmptySBOMAlwaysFailsEvenWithAcknowledgement(t *testing.T) {
 	args, output := cliFixture(t)
 	args = append(args, "--allow-incomplete")
 	runner := func(context.Context, string, string, string) ([]byte, error) {
-		return []byte(`{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]}`), nil
+		return []byte(`{"bomFormat":"CycloneDX","specVersion":"1.6","components":[]}`), nil
 	}
 	if runCLI(context.Background(), args, &bytes.Buffer{}, runner, fixedNow) == nil {
 		t.Fatal("empty inventory accepted")
@@ -408,12 +408,12 @@ func TestDirTargetMarksSourceTree(t *testing.T) {
 func TestCLIAutomaticallyZipsLargeSBOM(t *testing.T) {
 	args, output := cliFixture(t)
 	var raw bytes.Buffer
-	raw.WriteString(`{"bomFormat":"CycloneDX","specVersion":"1.5","components":[`)
-	for i := 0; i < 12000; i++ {
+	raw.WriteString(`{"bomFormat":"CycloneDX","specVersion":"1.6","components":[`)
+	for i := 0; i < 10000; i++ {
 		if i > 0 {
 			raw.WriteByte(',')
 		}
-		fmt.Fprintf(&raw, `{"type":"library","name":"pkg-%05d%s","version":"1.0"}`, i, strings.Repeat("a", 900))
+		fmt.Fprintf(&raw, `{"type":"library","name":"pkg-%05d%s","version":"1.0"}`, i, strings.Repeat("a", 800))
 	}
 	raw.WriteString(`]}`)
 	runner := func(context.Context, string, string, string) ([]byte, error) { return raw.Bytes(), nil }

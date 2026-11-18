@@ -74,7 +74,7 @@ def check_source_tree(output: Path) -> None:
     sbom_bytes = (folder / "sbom.cdx.json").read_bytes()
     text = sbom_bytes.decode()
     document = json.loads(text)
-    require(document.get("bomFormat") == "CycloneDX" and document.get("specVersion") == "1.5", "dir: wrong SBOM format")
+    require(document.get("bomFormat") == "CycloneDX" and document.get("specVersion") == "1.6", "dir: wrong SBOM format")
     purls = [component.get("purl", "") or "" for component in document.get("components", [])]
     for ecosystem in ("golang", "cargo", "maven", "nuget"):
         require(any(purl.startswith(f"pkg:{ecosystem}/") for purl in purls), f"dir: missing {ecosystem} PURL: {purls!r}")
@@ -101,7 +101,7 @@ def main() -> None:
         text = sbom_bytes.decode()
         document = json.loads(text)
         require(document.get("bomFormat") == "CycloneDX", f"{target}: wrong SBOM format")
-        require(document.get("specVersion") == "1.5", f"{target}: wrong SBOM version")
+        require(document.get("specVersion") == "1.6", f"{target}: wrong SBOM version")
         actual = sorted(
             (
                 {key: component.get(key) for key in ("name", "version", "purl")}

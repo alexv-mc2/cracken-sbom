@@ -71,7 +71,8 @@ func TestTRDependenciesCoverEveryComponentAndReachCycles(t *testing.T) {
 }
 
 func TestTRCompositionAggregates(t *testing.T) {
-	for graph, want := range map[GraphSource]string{GraphLockfile: "complete", GraphPartial: "incomplete", GraphUnknown: "unknown"} {
+	// Without npm components located in a root lockfile nothing is complete.
+	for graph, want := range map[GraphSource]string{GraphLockfile: "incomplete", GraphPartial: "incomplete", GraphUnknown: "unknown"} {
 		doc, hints, q := trDocument(t, trGraphRaw)
 		if err := applyTR(doc, hints, &Prepared{Graph: graph, Root: RootHint{Type: "application"}}, generateOptions{targetID: "r1"}, &q); err != nil {
 			t.Fatal(err)
@@ -257,5 +258,85 @@ func TestValidSPDXExpression(t *testing.T) {
 		if validSPDXExpression(bad) {
 			t.Errorf("accepted %q", bad)
 		}
+	}
+}
+
+func compositionsByAggregate(doc map[string]any) map[string][]string {
+	byName := map[string]string{productRef: "PRODUCT"}
+	for _, v := range doc["components"].([]any) {
+		c := v.(map[string]any)
+		byName[c["bom-ref"].(string)] = c["name"].(string)
+	}
+	out := map[string][]string{}
+	for _, v := range doc["compositions"].([]any) {
+		c := v.(map[string]any)
+		for _, r := range c["dependencies"].([]any) {
+			out[c["aggregate"].(string)] = append(out[c["aggregate"].(string)], byName[r.(string)])
+		}
+	}
+	return out
+}
+
+func TestTRCompleteOnlyForComponentsTheLockfileCovers(t *testing.T) {
+	root := t.TempDir()
+	lock := `{"lockfileVersion":3,"packages":{"":{"name":"app"},"node_modules/a":{"version":"1"},"node_modules/b":{"version":"1"}}}`
+	if os.WriteFile(filepath.Join(root, "package-lock.json"), []byte(lock), 0600) != nil {
+		t.Fatal("fixture")
+	}
+	npm := func(name, location string) string {
+		return `{"bom-ref":"` + name + `","type":"library","name":"` + name + `","version":"1","properties":[{"name":"syft:package:type","value":"npm"},{"name":"syft:location:0:path","value":"` + location + `"}]}`
+	}
+	python := `{"bom-ref":"py","type":"library","name":"py","version":"1","properties":[{"name":"syft:package:type","value":"python"},{"name":"syft:location:0:path","value":"/venv/lib/python3.12/site-packages/py-1.dist-info/METADATA"}]}`
+	cases := map[string]struct {
+		components, deps string
+		want             map[string][]string
+	}{
+		"all npm in the root lockfile": {
+			npm("a", "/package-lock.json") + "," + npm("b", "/package-lock.json"),
+			`{"ref":"a","dependsOn":["b"]}`,
+			map[string][]string{"complete": {"PRODUCT", "a", "b"}},
+		},
+		"python environment beside the lockfile": {
+			npm("a", "/package-lock.json") + "," + npm("b", "/package-lock.json") + "," + python,
+			`{"ref":"a","dependsOn":["b"]}`,
+			map[string][]string{"complete": {"a", "b"}, "incomplete": {"PRODUCT", "py"}},
+		},
+		"nested project with its own lockfile": {
+			npm("a", "/package-lock.json") + "," + npm("b", "/sub/package-lock.json"),
+			`{"ref":"a","dependsOn":[]}`,
+			map[string][]string{"complete": {"a"}, "incomplete": {"PRODUCT", "b"}},
+		},
+		"covered package depending on an uncovered one": {
+			npm("a", "/package-lock.json") + "," + npm("b", "/package-lock.json") + "," + python,
+			`{"ref":"a","dependsOn":["py"]},{"ref":"b","dependsOn":[]}`,
+			map[string][]string{"complete": {"b"}, "incomplete": {"PRODUCT", "a", "py"}},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			raw := `{"bomFormat":"CycloneDX","specVersion":"1.6","components":[` + tc.components + `],"dependencies":[` + tc.deps + `]}`
+			doc, hints, q := trDocument(t, raw)
+			if err := applyTR(doc, hints, &Prepared{ScanRoot: root, Graph: GraphLockfile, Root: RootHint{Type: "application"}}, generateOptions{targetID: "r1"}, &q); err != nil {
+				t.Fatal(err)
+			}
+			if got := compositionsByAggregate(doc); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("compositions %v, want %v", got, tc.want)
+			}
+			wantProduct := "incomplete"
+			if len(tc.want) == 1 {
+				wantProduct = "complete"
+			}
+			if q.GraphCompleteness != wantProduct {
+				t.Fatalf("quality completeness %q, want %q", q.GraphCompleteness, wantProduct)
+			}
+		})
+	}
+	// Without a v2/v3 lockfile at the root nothing is complete.
+	doc, hints, q := trDocument(t, `{"bomFormat":"CycloneDX","specVersion":"1.6","components":[`+npm("a", "/package-lock.json")+`],"dependencies":[{"ref":"a","dependsOn":[]}]}`)
+	if err := applyTR(doc, hints, &Prepared{ScanRoot: t.TempDir(), Graph: GraphLockfile}, generateOptions{targetID: "r1"}, &q); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := compositionsByAggregate(doc)["complete"]; has {
+		t.Fatal("complete claimed without a root lockfile")
 	}
 }

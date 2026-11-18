@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -56,16 +57,17 @@ func TestRegistrationFromInitIsVisibleAndSorted(t *testing.T) {
 	if _, ok := defaultRegistry.target("rootfs"); !ok {
 		t.Fatal("built-in target missing")
 	}
+	// Other extensions (yocto, detect, ...) register from their own files, so
+	// only order and the presence of the known entries are checked here.
 	names := []string{}
 	for _, ext := range defaultRegistry.extensions() {
 		names = append(names, ext.Name)
 	}
-	if !reflect.DeepEqual(names, []string{"builtin", "zz-registry-test"}) {
-		t.Fatalf("extensions not sorted by name: %v", names)
+	if !sort.StringsAreSorted(names) || !containsAll(names, "builtin", "zz-registry-test") {
+		t.Fatalf("extensions not sorted by name or missing: %v", names)
 	}
 	types := defaultRegistry.targetTypes()
-	want := []string{"dir", "docker-archive", "firmware-image", "npm", "oci-archive", "python", "rootfs", "zz-test-target"}
-	if !reflect.DeepEqual(types, want) {
+	if !sort.StringsAreSorted(types) || !containsAll(types, "dir", "docker-archive", "firmware-image", "npm", "oci-archive", "python", "rootfs", "zz-test-target") {
 		t.Fatalf("target types %v", types)
 	}
 	if err := runCLI(context.Background(), []string{"zz-test-cmd"}, &bytes.Buffer{}, nil, fixedNow); err != nil || !testInitCommandRan {
@@ -112,6 +114,19 @@ func TestRegistryRejectsDuplicatesAndOrderIsIndependentOfRegistration(t *testing
 		}
 	}()
 	Register(builtinExtension)
+}
+
+func containsAll(values []string, want ...string) bool {
+	have := map[string]bool{}
+	for _, v := range values {
+		have[v] = true
+	}
+	for _, w := range want {
+		if !have[w] {
+			return false
+		}
+	}
+	return true
 }
 
 type flagTarget struct {

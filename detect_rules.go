@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -23,6 +25,13 @@ type detectPlan struct {
 	Guidance   []string // steps to print when no SBOM is built
 	// Unrecognised: nothing detect can build from; detect exits non-zero.
 	Unrecognised bool
+	// Target overrides the --target passed to generate (default: the path
+	// detect looked at); Extra are further generate arguments.
+	Target string
+	Extra  []string
+	// Choices are alternative generate arguments when detect cannot pick one
+	// (several Yocto images or machines); detect prints one command each.
+	Choices [][]string
 }
 
 const yoctoGuideURL = "https://github.com/alexv-mc2/cracken-sbom/blob/main/docs/YOCTO.md"
@@ -218,7 +227,143 @@ func describeHits(hits []globHit, max int) []string {
 	return out
 }
 
+// yoctoImage is one image's SPDX in a deploy directory: the file the
+// IMAGE_LINK_NAME link points at, or the newest dated file.
+type yoctoImage struct {
+	Name     string // e.g. core-image-minimal-qemux86-64.rootfs
+	File     string // real file name, e.g. ...rootfs-20261118093000.spdx.tar.zst
+	Builds   int    // dated builds of this image in the directory
+	TarZst   bool
+	HasLink  bool
+	realPath string
+}
+
+var yoctoDateSuffix = regexp.MustCompile(`-[0-9]{8,14}$`)
+
+// yoctoImageFiles lists the image SPDX files directly in dir: SPDX 2.2
+// *.spdx.tar.zst archives and SPDX 3 *.rootfs.spdx.json documents.
+func yoctoImageFiles(dir string) []yoctoImage {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	root, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return nil
+	}
+	byName := map[string]*yoctoImage{}
+	linked := map[string]bool{}
+	reals := map[string]string{}
+	for _, e := range entries {
+		name := e.Name()
+		tarZst := strings.HasSuffix(name, ".spdx.tar.zst")
+		if !tarZst && !yoctoRootfsName.MatchString(name) {
+			continue
+		}
+		real, err := filepath.EvalSymlinks(filepath.Join(dir, name))
+		if err != nil || !within(root, real) || !isRegularFile(real) {
+			continue
+		}
+		if e.Type()&os.ModeSymlink != 0 {
+			linked[real] = true
+			continue
+		}
+		reals[real] = name
+	}
+	for real, file := range reals {
+		stem := strings.TrimSuffix(strings.TrimSuffix(file, ".spdx.tar.zst"), ".spdx.json")
+		image := yoctoDateSuffix.ReplaceAllString(stem, "")
+		img := byName[image]
+		if img == nil {
+			img = &yoctoImage{Name: image}
+			byName[image] = img
+		}
+		img.Builds++
+		// The linked file is the current build; otherwise the newest name wins.
+		if !img.HasLink && (linked[real] || file > img.File) {
+			img.File, img.realPath, img.HasLink = file, real, linked[real]
+			img.TarZst = strings.HasSuffix(file, ".spdx.tar.zst")
+		}
+	}
+	out := []yoctoImage{}
+	for _, img := range byName {
+		out = append(out, *img)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// yoctoMachineDirs lists tmp/deploy/images/<machine>/ folders with image SPDX.
+func yoctoMachineDirs(build string) []string {
+	base := filepath.Join(build, "tmp", "deploy", "images")
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return nil
+	}
+	out := []string{}
+	for _, e := range entries {
+		dir := filepath.Join(base, e.Name())
+		if e.IsDir() && len(yoctoImageFiles(dir)) > 0 {
+			out = append(out, dir)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// yoctoImageArgs are the generate arguments for one image in a deploy dir.
+// --yocto-image is the real file's stem, which matches that one file and
+// the link to it but no other build.
+func yoctoImageArgs(dir string, img yoctoImage, several bool) []string {
+	args := []string{"--target", dir}
+	if several || img.Builds > 1 {
+		stem := strings.TrimSuffix(strings.TrimSuffix(img.File, ".spdx.tar.zst"), ".spdx.json")
+		args = append(args, "--yocto-image", stem)
+	}
+	return args
+}
+
+func yoctoDeployPlan(dir string, images []yoctoImage, ev []string) detectPlan {
+	what := "a Yocto deploy folder with the image SPDX the build wrote"
+	if len(images) > 1 {
+		plan := detectPlan{What: what, Evidence: ev}
+		plan.Guidance = []string{fmt.Sprintf("It holds %d different images; choose one and run its command:", len(images))}
+		for _, img := range images {
+			plan.Choices = append(plan.Choices, yoctoImageArgs(dir, img, true))
+		}
+		plan.Guidance = append(plan.Guidance, "Details: "+yoctoGuideURL)
+		return plan
+	}
+	img := images[0]
+	args := yoctoImageArgs(dir, img, false)
+	format := "SPDX 3 (*.rootfs.spdx.json)"
+	if img.TarZst {
+		format = "SPDX 2.2 (*.spdx.tar.zst)"
+	}
+	plan := detectPlan{
+		What: what, Evidence: append(ev, img.File), TargetType: "yocto",
+		Why:    "the build's own " + format + " lists what is installed in the image " + img.Name + ", and the CVEs it already patched go into a separate VEX file",
+		Target: args[1], Extra: args[2:],
+	}
+	if img.Builds > 1 {
+		plan.Notes = append(plan.Notes, fmt.Sprintf("The folder holds %d builds of %s; the current one (%s) is used.", img.Builds, img.Name, img.File))
+	}
+	if img.TarZst {
+		if _, err := exec.LookPath("zstd"); err != nil {
+			plan.Notes = append(plan.Notes, "Unpacking the .spdx.tar.zst needs zstd: install it (for example apt install zstd or brew install zstd).")
+		}
+	}
+	return plan
+}
+
 func yoctoPlan(dir string) (detectPlan, bool) {
+	_, yoctoTarget := defaultRegistry.target("yocto")
+	// 1. tmp/deploy/images/<machine>/ itself.
+	if yoctoTarget {
+		if images := yoctoImageFiles(dir); len(images) > 0 {
+			return yoctoDeployPlan(dir, images, nil), true
+		}
+	}
 	ev := []string{}
 	for _, f := range []string{"conf/local.conf", "conf/bblayers.conf"} {
 		if isRegularFile(filepath.Join(dir, filepath.FromSlash(f))) {
@@ -242,15 +387,34 @@ func yoctoPlan(dir string) (detectPlan, bool) {
 		}
 		return detectPlan{}, false
 	}
-	plan := detectPlan{What: "a Yocto build folder", Evidence: ev}
-	if _, ok := defaultRegistry.target("yocto"); ok {
-		plan.Guidance = []string{
-			"Use the Yocto target, which reads the SPDX files the build wrote:",
-			"  cracken-sbom generate --target-type yocto --target " + shellQuote(dir) + " --target-id RELEASE --output NEW-DIR",
-			"Details: " + yoctoGuideURL,
+	if yoctoTarget {
+		// 2. A build folder: look in tmp/deploy/images/<machine>/.
+		machines := yoctoMachineDirs(dir)
+		switch {
+		case len(machines) == 1:
+			plan := yoctoDeployPlan(machines[0], yoctoImageFiles(machines[0]), nil)
+			plan.What = "a Yocto build folder"
+			plan.Evidence = append(append(ev, filepath.ToSlash(mustRel(dir, machines[0]))+"/"), plan.Evidence...)
+			return plan, true
+		case len(machines) > 1:
+			plan := detectPlan{What: "a Yocto build folder", Evidence: ev,
+				Guidance: []string{fmt.Sprintf("It holds images for %d machines; choose one and run its command:", len(machines))}}
+			for _, m := range machines {
+				images := yoctoImageFiles(m)
+				for _, img := range images {
+					plan.Choices = append(plan.Choices, yoctoImageArgs(m, img, len(images) > 1))
+				}
+			}
+			plan.Guidance = append(plan.Guidance, "Details: "+yoctoGuideURL)
+			return plan, true
 		}
-		return plan, true
+		return detectPlan{What: "a Yocto build folder", Evidence: ev, Guidance: []string{
+			"No image SPDX was found in tmp/deploy/images/<machine>/ yet.",
+			"Enable the SPDX output (INHERIT += \"create-spdx\"; on by default in Poky), build the image with bitbake,",
+			"then run cracken-sbom detect on this folder again. Details: " + yoctoGuideURL,
+		}}, true
 	}
+	plan := detectPlan{What: "a Yocto build folder", Evidence: ev}
 	plan.Guidance = []string{
 		"This version of cracken-sbom does not read Yocto SPDX files yet.",
 		"Scanning a build folder directly would list build-host tools, not what ships on your device.",
@@ -262,6 +426,13 @@ func yoctoPlan(dir string) (detectPlan, bool) {
 		"     cracken-sbom detect on that folder; it is then scanned as a root file system.",
 	}
 	return plan, true
+}
+
+func mustRel(base, p string) string {
+	if rel, err := filepath.Rel(base, p); err == nil {
+		return rel
+	}
+	return p
 }
 
 func dockerfilePlan(rel string) detectPlan {

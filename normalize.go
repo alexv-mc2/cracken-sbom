@@ -19,6 +19,24 @@ const maxSBOMBytes = 16 * 1024 * 1024
 var identifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+_-]*$`)
 var purlQualifierVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+_~:-]*$`)
 var licenseExpressionPattern = regexp.MustCompile(`^[A-Za-z0-9(][A-Za-z0-9.+_() -]*$`)
+
+// SPDX 2.2 license-ref with a document prefix (Annex D):
+// "DocumentRef-" idstring ":" "LicenseRef-" idstring, idstring = [A-Za-z0-9.-]+.
+// Yocto writes them for licences defined in the recipe document, e.g.
+// "DocumentRef-recipe-busybox:LicenseRef-bzip2-1.0.4".
+var documentLicenseRefPattern = regexp.MustCompile(`DocumentRef-[A-Za-z0-9.-]+:(LicenseRef-[A-Za-z0-9.-]+)`)
+
+// rewriteDocumentLicenseRefs drops the document prefix of cross-document
+// licence references. In one CycloneDX document the prefix names nothing, and
+// CycloneDX licence expressions accept LicenseRef-<idstring>. Only this exact
+// form is rewritten; any other colon stays and is refused by the checks.
+const documentLicenseRefWarning = "Cross-document SPDX licence references (DocumentRef-…:LicenseRef-…) were written as LicenseRef-… licence expressions."
+
+func rewriteDocumentLicenseRefs(s string) (string, bool) {
+	out := documentLicenseRefPattern.ReplaceAllString(s, "$1")
+	return out, out != s
+}
+
 var credentialPattern = regexp.MustCompile(`(?i)(password|passwd|token|secret|api[_-]?key|credential|authorization)\s*[:=]`)
 
 // The output's exact CycloneDX 1.6 schema, not the engine's newer SPDX list,
@@ -345,6 +363,12 @@ func normalizeComponentWithHints(c map[string]any, ref string, quality *Quality,
 			}
 			if expr, exists := entry["expression"]; exists {
 				s, ok := expr.(string)
+				if ok {
+					var rewritten bool
+					if s, rewritten = rewriteDocumentLicenseRefs(s); rewritten {
+						addWarning(quality, documentLicenseRefWarning)
+					}
+				}
 				if !ok || len(s) > 1024 || !licenseExpressionPattern.MatchString(s) || suspiciousString(s) || strings.Contains(s, "..") {
 					return nil, errors.New("unsafe license expression")
 				}
@@ -353,6 +377,14 @@ func normalizeComponentWithHints(c map[string]any, ref string, quality *Quality,
 				// Keep identifiers only. License names/free text may embed source paths.
 				if id, exists := lic["id"]; exists {
 					s, ok := id.(string)
+					if ok && documentLicenseRefPattern.FindString(s) == s {
+						// A cross-document reference is not an SPDX identifier.
+						rewritten, _ := rewriteDocumentLicenseRefs(s)
+						addWarning(quality, documentLicenseRefWarning)
+						expressionChoices = append(expressionChoices, rewritten)
+						convertedIDs++
+						continue
+					}
 					if !ok || !identifierPattern.MatchString(s) {
 						return nil, errors.New("unsafe license identifier")
 					}

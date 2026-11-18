@@ -39,7 +39,7 @@ network access, says what it is and which command fits, and builds the SBOM:
   unpacked root file system       generate --target-type rootfs
   docker save / OCI image .tar    generate --target-type docker-archive / oci-archive
   firmware image (.bin, .img)     generate --target-type firmware-image (needs unblob or binwalk)
-  Yocto build folder              explains where the build's own SPDX SBOM is
+  Yocto build or deploy folder    generate --target-type yocto (reads the image SPDX)
   Dockerfile                      explains how to save the image and scan that
 
 Flags:
@@ -112,6 +112,15 @@ func runDetectCommand(ctx context.Context, args []string, env Env) error {
 		for _, g := range plan.Guidance {
 			fmt.Fprintln(out, g)
 		}
+		if len(plan.Choices) > 0 {
+			set := map[string]bool{}
+			fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+			for _, choice := range plan.Choices {
+				gen := append([]string{"--target-type", "yocto"}, choice...)
+				gen = append(gen, completeGenerateArgs(target, info, env, fs, set)...)
+				fmt.Fprintf(out, "  cracken-sbom generate %s\n", joinShell(gen))
+			}
+		}
 		printNotes(out, plan.Notes)
 		if plan.Unrecognised {
 			return errors.New("no SBOM was written: detect found nothing it can list in " + shellQuote(target))
@@ -126,7 +135,11 @@ func runDetectCommand(ctx context.Context, args []string, env Env) error {
 	// Build the generate command line from what was found and what was given.
 	set := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
-	gen := []string{"--target-type", plan.TargetType, "--target", target}
+	scanTarget := target
+	if plan.Target != "" {
+		scanTarget = plan.Target
+	}
+	gen := append([]string{"--target-type", plan.TargetType, "--target", scanTarget}, plan.Extra...)
 	if !set["target-id"] {
 		gen = append(gen, "--target-id", defaultTargetID(target, info, env))
 	}
@@ -185,6 +198,34 @@ func runDetectCommand(ctx context.Context, args []string, env Env) error {
 		return err
 	}
 	return RunGenerate(ctx, o, env)
+}
+
+// completeGenerateArgs adds what a printed generate command needs besides
+// the target: target id, output, engine and the flags given to detect.
+func completeGenerateArgs(target string, info os.FileInfo, env Env, fs *flag.FlagSet, set map[string]bool) []string {
+	args := []string{}
+	if !set["target-id"] {
+		args = append(args, "--target-id", defaultTargetID(target, info, env))
+	}
+	if !set["output"] {
+		if output, err := defaultOutput(target, info, env); err == nil {
+			args = append(args, "--output", output)
+		}
+	}
+	if !set["syft"] {
+		for _, locate := range defaultRegistry.engineLocators() {
+			if p, ok := locate(); ok {
+				args = append(args, "--syft", p)
+				break
+			}
+		}
+	}
+	fs.Visit(func(f *flag.Flag) {
+		if !detectOwnFlags[f.Name] {
+			args = append(args, "--"+f.Name+"="+f.Value.String())
+		}
+	})
+	return args
 }
 
 func printNotes(out io.Writer, notes []string) {

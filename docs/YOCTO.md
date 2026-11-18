@@ -13,26 +13,36 @@ for your records. There are two ways to use them:
 
 ## CycloneDX 1.6 and VEX from the Yocto SPDX
 
+Run it on the image's deploy directory, `tmp/deploy/images/<machine>/` in the
+build directory (here for `qemux86-64`):
+
 ```sh
 ./cracken-sbom generate --target-type yocto \
-  --target "$BUILDDIR/tmp/deploy/images/your-machine" \
-  --target-id your-image-2026.11.18 \
+  --target "$BUILDDIR/tmp/deploy/images/qemux86-64" \
+  --target-id core-image-minimal-2026.11.18 \
   --syft /opt/verified-tools/syft \
-  --output /work/evidence/your-image-2026.11.18 \
+  --output /work/evidence/core-image-minimal-2026.11.18 \
   --manufacturer-name "Example GmbH" --manufacturer-email psirt@example.com \
   --product-license LicenseRef-example-proprietary
 ```
 
-`--target` is the image's deploy directory (or any directory holding one
-image's SPDX documents). The tool reads:
+`cracken-sbom detect` on the build directory or on the deploy directory finds
+the image SPDX and runs this command itself; with several images or machines
+it prints one complete command for each.
+
+A deploy directory holds the dated files of each build and links without the
+date (`IMAGE_LINK_NAME`), for example
+`core-image-minimal-qemux86-64.rootfs-20261118093000.spdx.tar.zst` and the
+link `core-image-minimal-qemux86-64.rootfs.spdx.tar.zst`. A link and its target
+count as one file. The tool reads:
 
 | Release | What it reads | Notes |
 |---|---|---|
-| Scarthgap 5.0 and earlier (SPDX 2.2) | the image's single `*.spdx.tar.zst`, or the unpacked `*.spdx.json` documents | the archive is unpacked with the external [zstd](https://facebook.github.io/zstd/) (`--zstd /path/to/zstd` when it is not on `PATH`); the image document's `CONTAINS` list selects the installed packages |
-| Wrynose 6.0 and 5.1+ (SPDX 3.0.0/3.0.1) | the single complete `*.rootfs.spdx.json` | packages reachable from the image through `contains`, `dependsOn` and `hasInput` |
+| Scarthgap 5.0 and earlier (SPDX 2.2, `create-spdx-2.2`) | the image's `*.spdx.tar.zst`, or the unpacked `*.spdx.json` documents | the archive is unpacked with the external [zstd](https://facebook.github.io/zstd/) (`--zstd /path/to/zstd` when it is not on `PATH`); the image document's `CONTAINS` list selects the installed packages |
+| Styhead 5.1 and later, including Walnascar 5.2, Whinlatter 5.3 and Wrynose 6.0 (SPDX 3, `create-spdx-3.0` is the default class since 5.1) | the single complete `*.rootfs.spdx.json` (SPDX 3.0.0 or 3.0.1, depending on the release) | packages reachable from the image through `contains`, `dependsOn` and `hasInput` |
 
-If the directory holds several images, choose one with `--yocto-image NAME`
-(a file name prefix). Build-host and SDK packages (`*-native`, `nativesdk-*`,
+If the directory holds several different images, choose one with
+`--yocto-image NAME` (a file name prefix, such as `core-image-minimal`). Build-host and SDK packages (`*-native`, `nativesdk-*`,
 `*-cross*`) and recipes (source packages) are never listed. The same checks
 as the crAcken GitHub Action's `yocto-pack` apply: no links out of the
 directory, no unsafe archive paths or links, one SPDX version, SPDX 3.1 refused,
@@ -57,13 +67,25 @@ the build already handled therefore go into a **separate** file,
 | SPDX 3 `security_VexNotAffectedVulnAssessmentRelationship` (`doesNotAffect`) | `not_affected` (with `code_not_present`, `code_not_reachable` or `protected_by_mitigating_control` when the SPDX justification maps to one) |
 | SPDX 3 `security_VexAffectedVulnAssessmentRelationship` (`affects`) | `exploitable` |
 
-These are the same rules crAcken uses when it reads the native SPDX. An
+These are the same rules crAcken uses when it reads the native SPDX.
+Licence references to another document of the set
+(`DocumentRef-recipe-xz:LicenseRef-PD`) are written as `LicenseRef-PD` in the
+CycloneDX licence expression, because the document prefix names nothing in a
+single CycloneDX file; `quality.json` notes when this happened. An
 assessment on a recipe applies to the packages the recipe generates;
 assessments withdrawn in the past are left out. Each `affects[].ref` is the
 `bom-ref` of the component in `sbom.cdx.json`, and `versions` repeats its
 version. The file has no inventory of its own and no free-text notes from the
 build. `provenance.json` lists it with its SHA-256 under `extra_outputs`. If
 the SPDX holds no such data, no VEX file is written and `quality.json` says so.
+
+Tested on real build output: a Scarthgap 5.0 `core-image-minimal` archive
+(`fixtures/yocto/real-scarthgap`, 38 components, 28 `resolved`) and the Yocto
+Project's own Wrynose 6.0.3 `core-image-minimal-qemux86-64.rootfs.spdx.json`
+from downloads.yoctoproject.org (38 components, 32 CVEs: 22 `not_affected`,
+10 `resolved`). The second file is not checked in; to repeat that test, set
+`CRACKEN_SBOM_YOCTO_SPDX3_SAMPLE` to a local copy when running
+`tests/run-tests.sh`.
 
 crAcken imports a CycloneDX VEX one finding at a time. To have crAcken apply
 all of the build's patched-CVE data at once, upload the native SPDX as below.

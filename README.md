@@ -47,11 +47,11 @@ passed through unchanged.
 | Unpacked firmware root filesystem | `etc/` plus a package database (dpkg/opkg, apk, rpm, pacman) | `generate --target-type rootfs` |
 | Container image | a `docker save` archive (`manifest.json`) or an OCI layout (`oci-layout`, `index.json`) in a `.tar` | `generate --target-type docker-archive` or `oci-archive` |
 | Firmware image (`.bin`, `.img`, ...) | SquashFS, UBI, uImage, FIT, ext4, EROFS, CramFS, JFFS2, cpio, TRX and other signatures; magic numbers from binwalk and unblob | `generate --target-type firmware-image` with unblob or binwalk found in `PATH` ([Firmware images](#firmware-images)) |
-| Yocto build folder | `conf/local.conf`, `tmp/deploy/spdx` | builds nothing yet: points to the SPDX SBOM your build already writes ([Yocto guide](docs/YOCTO.md)) |
+| Yocto build folder, or its `tmp/deploy/images/<machine>/` | the image SPDX the build wrote: `*.spdx.tar.zst` (SPDX 2.2) or `*.rootfs.spdx.json` (SPDX 3) | `yocto`: CycloneDX 1.6 SBOM plus a separate VEX file ([Yocto guide](docs/YOCTO.md)); with several images or machines it prints one command each; without image SPDX it says how to enable it |
 | Only a `Dockerfile` | the recipe, not the image | builds nothing: shows how to `docker save` the image and run detect on the archive |
 
 Exit code 0 means an SBOM was built, or detect explained the next step without
-building one (Yocto, Dockerfile, an npm project without a lockfile). Exit code
+building one (Dockerfile, an npm project without a lockfile, a Yocto build with several images or no image SPDX yet). Exit code
 1 means it found nothing it can list, or something is missing (Syft, an
 extractor, a path). `cracken-sbom --help` and `cracken-sbom COMMAND --help`
 list every flag.

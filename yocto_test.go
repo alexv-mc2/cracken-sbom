@@ -331,3 +331,40 @@ func TestYoctoNativeNames(t *testing.T) {
 		}
 	}
 }
+
+func TestYoctoDeployLinkAndDatedArchiveCountOnce(t *testing.T) {
+	zstd := fakeZstd(t)
+	docs := map[string][]byte{}
+	headers := []tar.Header{}
+	entries, _ := os.ReadDir(filepath.Join("fixtures", "yocto", "spdx2"))
+	for _, e := range entries {
+		data, _ := os.ReadFile(filepath.Join("fixtures", "yocto", "spdx2", e.Name()))
+		docs[e.Name()] = data
+		headers = append(headers, tar.Header{Name: e.Name(), Typeflag: tar.TypeReg})
+	}
+	deploy := t.TempDir()
+	dated := "core-image-minimal-qemux86-64.rootfs-20261118093000.spdx.tar.zst"
+	writeTar(t, filepath.Join(deploy, dated), headers, docs)
+	if os.Symlink(dated, filepath.Join(deploy, "core-image-minimal-qemux86-64.rootfs.spdx.tar.zst")) != nil {
+		t.Fatal("link")
+	}
+	for _, image := range []string{"", "core-image-minimal-qemux86-64.rootfs"} {
+		set, err := collectYoctoSPDX(context.Background(), deploy, zstd, image)
+		if err != nil || set.inputKind != "spdx-tar-zst" {
+			t.Fatalf("image %q: %v", image, err)
+		}
+	}
+	// Two different builds still need a choice.
+	writeTar(t, filepath.Join(deploy, "core-image-minimal-qemux86-64.rootfs-20261119093000.spdx.tar.zst"), headers, docs)
+	if _, err := collectYoctoSPDX(context.Background(), deploy, zstd, ""); err == nil {
+		t.Fatal("two real archives accepted")
+	}
+	// A dated SPDX 3 rootfs file and its link are one root.
+	v3 := t.TempDir()
+	root, _ := os.ReadFile(filepath.Join("fixtures", "yocto", "spdx3", "core-image-minimal-qemux86-64.rootfs.spdx.json"))
+	_ = os.WriteFile(filepath.Join(v3, "img.rootfs-20261118093000.spdx.json"), root, 0600)
+	_ = os.Symlink("img.rootfs-20261118093000.spdx.json", filepath.Join(v3, "img.rootfs.spdx.json"))
+	if set, err := collectYoctoSPDX(context.Background(), v3, "", ""); err != nil || len(set.docs) != 1 {
+		t.Fatalf("dated SPDX 3 root: %v", err)
+	}
+}

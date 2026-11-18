@@ -205,15 +205,15 @@ func collectYoctoSPDX(ctx context.Context, dir, zstd, image string) (*yoctoSet, 
 	if err != nil {
 		return nil, errors.New("cannot list the Yocto input directory")
 	}
-	archives = filterImage(archives, image)
+	archives, err = uniqueArchives(root, filterImage(archives, image))
+	if err != nil {
+		return nil, err
+	}
 	if len(archives) > 1 {
 		return nil, fmt.Errorf("%d .spdx.tar.zst image archives found; choose one with --yocto-image", len(archives))
 	}
 	if len(archives) == 1 {
-		archive, err := filepath.EvalSymlinks(archives[0])
-		if err != nil || !within(root, archive) {
-			return nil, errors.New("unsafe symlink in the Yocto input: the .spdx.tar.zst points outside the directory")
-		}
+		archive := archives[0]
 		set.inputKind = "spdx-tar-zst"
 		if err := readZstdTar(ctx, archive, zstd, c); err != nil {
 			return nil, err
@@ -225,6 +225,28 @@ func collectYoctoSPDX(ctx context.Context, dir, zstd, image string) (*yoctoSet, 
 		return nil, errors.New("no SPDX JSON documents found in the Yocto input; enable create-spdx and pass tmp/deploy/images/<machine>")
 	}
 	return finishYoctoSet(set, c.docs, image)
+}
+
+// uniqueArchives resolves links (IMAGE_LINK_NAME points at the dated archive)
+// and counts each real archive once. Links must stay inside the directory.
+func uniqueArchives(root string, paths []string) ([]string, error) {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, p := range paths {
+		real, err := filepath.EvalSymlinks(p)
+		if err != nil || !within(root, real) {
+			return nil, errors.New("unsafe symlink in the Yocto input: a .spdx.tar.zst points outside the directory")
+		}
+		if info, err := os.Stat(real); err != nil || !info.Mode().IsRegular() {
+			return nil, errors.New("a .spdx.tar.zst in the Yocto input is not a regular file")
+		}
+		if !seen[real] {
+			seen[real] = true
+			out = append(out, real)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 func filterImage(paths []string, image string) []string {
@@ -385,6 +407,10 @@ func readZstdTar(ctx context.Context, archive, zstd string, c *yoctoCollector) e
 	return nil
 }
 
+// The image's SPDX 3 file: <image>-<machine>.rootfs.spdx.json, or the dated
+// file IMAGE_LINK_NAME points at, <image>-<machine>.rootfs-<DATETIME>.spdx.json.
+var yoctoRootfsName = regexp.MustCompile(`\.rootfs(-[0-9]{8,14})?\.spdx\.json$`)
+
 var spdx3ContextPattern = regexp.MustCompile(`(?i)^https?://spdx\.org/rdf/3\.0\.[01]/spdx-context\.jsonld$`)
 var spdx3AnyContextPattern = regexp.MustCompile(`(?i)spdx\.org/rdf/3`)
 
@@ -476,7 +502,7 @@ func finishYoctoSet(set *yoctoSet, docs []yoctoDoc, image string) (*yoctoSet, er
 				return nil, errors.New("SPDX 3 requires a supported 3.0.0 or 3.0.1 @context")
 			}
 			base := path.Base(d.name)
-			if strings.HasSuffix(base, ".rootfs.spdx.json") && (image == "" || strings.HasPrefix(base, image)) {
+			if yoctoRootfsName.MatchString(base) && (image == "" || strings.HasPrefix(base, image)) {
 				roots = append(roots, d)
 			}
 		}

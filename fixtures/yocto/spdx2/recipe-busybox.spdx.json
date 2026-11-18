@@ -1,0 +1,42 @@
+{
+ "SPDXID": "SPDXRef-DOCUMENT",
+ "creationInfo": {
+  "created": "2026-11-01T10:00:00Z",
+  "creators": [
+   "Tool: OpenEmbedded Core create-spdx.bbclass",
+   "Organization: OpenEmbedded ()"
+  ],
+  "licenseListVersion": "3.14"
+ },
+ "dataLicense": "CC0-1.0",
+ "documentNamespace": "http://spdx.org/spdxdoc/recipe-busybox-0001",
+ "name": "recipe-busybox",
+ "spdxVersion": "SPDX-2.2",
+ "packages": [
+  {
+   "SPDXID": "SPDXRef-Recipe-busybox",
+   "name": "busybox",
+   "versionInfo": "1.36.1",
+   "downloadLocation": "NOASSERTION",
+   "licenseDeclared": "NOASSERTION",
+   "licenseConcluded": "NOASSERTION",
+   "copyrightText": "NOASSERTION",
+   "supplier": "Organization: OpenEmbedded ()",
+   "externalRefs": [
+    {
+     "referenceCategory": "SECURITY",
+     "referenceLocator": "cpe:2.3:*:busybox:busybox:1.36.1:*:*:*:*:*:*:*",
+     "referenceType": "http://spdx.org/rdf/references/cpe23Type"
+    }
+   ],
+   "sourceInfo": "CVEs fixed: CVE-2022-28391 CVE-2022-30065 CVE-2023-42364"
+  }
+ ],
+ "relationships": [
+  {
+   "spdxElementId": "SPDXRef-DOCUMENT",
+   "relatedSpdxElement": "SPDXRef-Recipe-busybox",
+   "relationshipType": "DESCRIBES"
+  }
+ ]
+}

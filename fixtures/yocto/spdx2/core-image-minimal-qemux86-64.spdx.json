@@ -1,0 +1,62 @@
+{
+ "SPDXID": "SPDXRef-DOCUMENT",
+ "creationInfo": {
+  "created": "2026-11-01T10:00:00Z",
+  "creators": [
+   "Tool: OpenEmbedded Core create-spdx.bbclass",
+   "Organization: OpenEmbedded ()"
+  ],
+  "licenseListVersion": "3.14"
+ },
+ "dataLicense": "CC0-1.0",
+ "documentNamespace": "http://spdx.org/spdxdoc/core-image-minimal-qemux86-64-0003",
+ "name": "core-image-minimal-qemux86-64",
+ "spdxVersion": "SPDX-2.2",
+ "packages": [
+  {
+   "SPDXID": "SPDXRef-Image-core-image-minimal-qemux86-64",
+   "name": "core-image-minimal-qemux86-64",
+   "versionInfo": "1.0",
+   "downloadLocation": "NOASSERTION",
+   "licenseDeclared": "NOASSERTION",
+   "licenseConcluded": "NOASSERTION",
+   "copyrightText": "NOASSERTION",
+   "supplier": "Organization: OpenEmbedded ()"
+  }
+ ],
+ "relationships": [
+  {
+   "spdxElementId": "SPDXRef-DOCUMENT",
+   "relatedSpdxElement": "SPDXRef-Image-core-image-minimal-qemux86-64",
+   "relationshipType": "DESCRIBES"
+  },
+  {
+   "spdxElementId": "SPDXRef-Image-core-image-minimal-qemux86-64",
+   "relatedSpdxElement": "DocumentRef-package-busybox:SPDXRef-PACKAGE-busybox",
+   "relationshipType": "CONTAINS"
+  },
+  {
+   "spdxElementId": "SPDXRef-Image-core-image-minimal-qemux86-64",
+   "relatedSpdxElement": "DocumentRef-package-libz1:SPDXRef-PACKAGE-libz1",
+   "relationshipType": "CONTAINS"
+  }
+ ],
+ "externalDocumentRefs": [
+  {
+   "externalDocumentId": "DocumentRef-package-busybox",
+   "spdxDocument": "http://spdx.org/spdxdoc/busybox-0002",
+   "checksum": {
+    "algorithm": "SHA1",
+    "checksumValue": "0000000000000000000000000000000000000000"
+   }
+  },
+  {
+   "externalDocumentId": "DocumentRef-package-libz1",
+   "spdxDocument": "http://spdx.org/spdxdoc/libz1-0002",
+   "checksum": {
+    "algorithm": "SHA1",
+    "checksumValue": "0000000000000000000000000000000000000000"
+   }
+  }
+ ]
+}

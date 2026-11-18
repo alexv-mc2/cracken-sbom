@@ -1,9 +1,72 @@
 # Upload an SBOM from a Yocto build
 
 A [Yocto Project](https://www.yoctoproject.org/) build can create an SBOM itself.
-You do not need the crAcken generator to create a second inventory when your
-build already produces a supported SPDX inventory. Use the files from the
-exact image you ship, and keep the original build output for your records.
+Use the files from the exact image you ship, and keep the original build output
+for your records. There are two ways to use them:
+
+- **Upload the native SPDX to crAcken** (sections below). crAcken reads the
+  build's patched-CVE and VEX data from it directly, so already fixed CVEs are
+  not reported. This needs no generator.
+- **Generate a CycloneDX 1.6 SBOM plus a separate VEX file** with
+  `cracken-sbom generate --target-type yocto` for customers or authorities that
+  ask for BSI TR-03183-2 v2.1.0 (CycloneDX 1.6), as described next.
+
+## CycloneDX 1.6 and VEX from the Yocto SPDX
+
+```sh
+./cracken-sbom generate --target-type yocto \
+  --target "$BUILDDIR/tmp/deploy/images/your-machine" \
+  --target-id your-image-2026.11.18 \
+  --syft /opt/verified-tools/syft \
+  --output /work/evidence/your-image-2026.11.18 \
+  --manufacturer-name "Example GmbH" --manufacturer-email psirt@example.com \
+  --product-license LicenseRef-example-proprietary
+```
+
+`--target` is the image's deploy directory (or any directory holding one
+image's SPDX documents). The tool reads:
+
+| Release | What it reads | Notes |
+|---|---|---|
+| Scarthgap 5.0 and earlier (SPDX 2.2) | the image's single `*.spdx.tar.zst`, or the unpacked `*.spdx.json` documents | the archive is unpacked with the external [zstd](https://facebook.github.io/zstd/) (`--zstd /path/to/zstd` when it is not on `PATH`); the image document's `CONTAINS` list selects the installed packages |
+| Wrynose 6.0 and 5.1+ (SPDX 3.0.0/3.0.1) | the single complete `*.rootfs.spdx.json` | packages reachable from the image through `contains`, `dependsOn` and `hasInput` |
+
+If the directory holds several images, choose one with `--yocto-image NAME`
+(a file name prefix). Build-host and SDK packages (`*-native`, `nativesdk-*`,
+`*-cross*`) and recipes (source packages) are never listed. The same checks
+as the crAcken GitHub Action's `yocto-pack` apply: no links out of the
+directory, no unsafe archive paths or links, one SPDX version, SPDX 3.1 refused,
+128 MiB read limit, 10,000 documents.
+
+The pinned Syft converts the selected packages with `syft convert` to
+CycloneDX 1.6, and the normal minimization and TR-03183-2 layer follow
+(see [TR-03183-2](TR-03183-2.md)). The image is the product
+(`metadata.component`); its name and version come from the image document
+unless `--product-name` / `--product-version` are given.
+
+### The VEX file
+
+BSI TR-03183-2 §3.1 forbids vulnerability information in an SBOM. The CVEs
+the build already handled therefore go into a **separate** file,
+`sbom.vex.cdx.json` (CycloneDX VEX 1.6), next to `sbom.cdx.json`:
+
+| Yocto source | CycloneDX `analysis.state` |
+|---|---|
+| SPDX 2.2 recipe `sourceInfo` "CVEs fixed: …" | `resolved` |
+| SPDX 3 `security_VexFixedVulnAssessmentRelationship` (`fixedIn`) | `resolved` |
+| SPDX 3 `security_VexNotAffectedVulnAssessmentRelationship` (`doesNotAffect`) | `not_affected` (with `code_not_present`, `code_not_reachable` or `protected_by_mitigating_control` when the SPDX justification maps to one) |
+| SPDX 3 `security_VexAffectedVulnAssessmentRelationship` (`affects`) | `exploitable` |
+
+These are the same rules crAcken uses when it reads the native SPDX. An
+assessment on a recipe applies to the packages the recipe generates;
+assessments withdrawn in the past are left out. Each `affects[].ref` is the
+`bom-ref` of the component in `sbom.cdx.json`, and `versions` repeats its
+version. The file has no inventory of its own and no free-text notes from the
+build. `provenance.json` lists it with its SHA-256 under `extra_outputs`. If
+the SPDX holds no such data, no VEX file is written and `quality.json` says so.
+
+crAcken imports a CycloneDX VEX one finding at a time. To have crAcken apply
+all of the build's patched-CVE data at once, upload the native SPDX as below.
 
 ## Choose the instructions for your release
 

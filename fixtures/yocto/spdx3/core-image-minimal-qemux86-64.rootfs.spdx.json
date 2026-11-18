@@ -1,0 +1,319 @@
+{
+ "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+ "@graph": [
+  {
+   "type": "CreationInfo",
+   "@id": "_:CreationInfo1",
+   "specVersion": "3.0.1",
+   "created": "2026-11-01T10:00:00Z",
+   "createdBy": [
+    "http://spdx.org/spdxdocs/agent/OpenEmbedded"
+   ]
+  },
+  {
+   "type": "Organization",
+   "spdxId": "http://spdx.org/spdxdocs/agent/OpenEmbedded",
+   "creationInfo": "_:CreationInfo1",
+   "name": "OpenEmbedded"
+  },
+  {
+   "type": "SpdxDocument",
+   "spdxId": "http://spdx.org/spdxdocs/doc",
+   "creationInfo": "_:CreationInfo1",
+   "name": "core-image-minimal-qemux86-64.rootfs",
+   "rootElement": [
+    "http://spdx.org/spdxdocs/sbom"
+   ],
+   "profileConformance": [
+    "core",
+    "software",
+    "security",
+    "build"
+   ]
+  },
+  {
+   "type": "software_Sbom",
+   "spdxId": "http://spdx.org/spdxdocs/sbom",
+   "creationInfo": "_:CreationInfo1",
+   "name": "core-image-minimal-qemux86-64.rootfs",
+   "rootElement": [
+    "http://spdx.org/spdxdocs/rootfs"
+   ],
+   "software_sbomType": [
+    "build"
+   ]
+  },
+  {
+   "type": "software_Package",
+   "spdxId": "http://spdx.org/spdxdocs/rootfs",
+   "creationInfo": "_:CreationInfo1",
+   "name": "core-image-minimal-qemux86-64.rootfs",
+   "software_packageVersion": "1.0",
+   "software_primaryPurpose": "filesystemImage"
+  },
+  {
+   "type": "software_Package",
+   "spdxId": "http://spdx.org/spdxdocs/busybox/package",
+   "creationInfo": "_:CreationInfo1",
+   "name": "busybox",
+   "software_packageVersion": "1.36.1",
+   "software_primaryPurpose": "install",
+   "software_packageUrl": "pkg:yocto/core/busybox@1.36.1",
+   "externalIdentifier": [
+    {
+     "type": "ExternalIdentifier",
+     "externalIdentifierType": "cpe23",
+     "identifier": "cpe:2.3:a:busybox:busybox:1.36.1:*:*:*:*:*:*:*"
+    }
+   ]
+  },
+  {
+   "type": "software_Package",
+   "spdxId": "http://spdx.org/spdxdocs/busybox/recipe",
+   "creationInfo": "_:CreationInfo1",
+   "name": "busybox",
+   "software_packageVersion": "1.36.1",
+   "software_primaryPurpose": "source"
+  },
+  {
+   "type": "software_Package",
+   "spdxId": "http://spdx.org/spdxdocs/zlib/package",
+   "creationInfo": "_:CreationInfo1",
+   "name": "libz1",
+   "software_packageVersion": "1.3.1",
+   "software_primaryPurpose": "install",
+   "software_packageUrl": "pkg:yocto/core/zlib@1.3.1",
+   "externalIdentifier": [
+    {
+     "type": "ExternalIdentifier",
+     "externalIdentifierType": "cpe23",
+     "identifier": "cpe:2.3:a:zlib:zlib:1.3.1:*:*:*:*:*:*:*"
+    }
+   ]
+  },
+  {
+   "type": "software_Package",
+   "spdxId": "http://spdx.org/spdxdocs/zlib/recipe",
+   "creationInfo": "_:CreationInfo1",
+   "name": "zlib",
+   "software_packageVersion": "1.3.1",
+   "software_primaryPurpose": "source"
+  },
+  {
+   "type": "software_Package",
+   "spdxId": "http://spdx.org/spdxdocs/openssl/package",
+   "creationInfo": "_:CreationInfo1",
+   "name": "libssl3",
+   "software_packageVersion": "3.2.3",
+   "software_primaryPurpose": "install",
+   "software_packageUrl": "pkg:yocto/core/openssl@3.2.3"
+  },
+  {
+   "type": "software_Package",
+   "spdxId": "http://spdx.org/spdxdocs/openssl/recipe",
+   "creationInfo": "_:CreationInfo1",
+   "name": "openssl",
+   "software_packageVersion": "3.2.3",
+   "software_primaryPurpose": "source"
+  },
+  {
+   "type": "software_Package",
+   "spdxId": "http://spdx.org/spdxdocs/quilt-native/package",
+   "creationInfo": "_:CreationInfo1",
+   "name": "quilt-native",
+   "software_packageVersion": "0.67",
+   "software_primaryPurpose": "install"
+  },
+  {
+   "type": "software_Package",
+   "spdxId": "http://spdx.org/spdxdocs/unrelated/package",
+   "creationInfo": "_:CreationInfo1",
+   "name": "not-in-image",
+   "software_packageVersion": "1.0",
+   "software_primaryPurpose": "install"
+  },
+  {
+   "type": "simplelicensing_LicenseExpression",
+   "spdxId": "http://spdx.org/spdxdocs/license/gpl2",
+   "creationInfo": "_:CreationInfo1",
+   "simplelicensing_licenseExpression": "GPL-2.0-only"
+  },
+  {
+   "type": "Relationship",
+   "spdxId": "http://spdx.org/spdxdocs/rel/1",
+   "creationInfo": "_:CreationInfo1",
+   "from": "http://spdx.org/spdxdocs/rootfs",
+   "to": [
+    "http://spdx.org/spdxdocs/busybox/package",
+    "http://spdx.org/spdxdocs/zlib/package",
+    "http://spdx.org/spdxdocs/openssl/package",
+    "http://spdx.org/spdxdocs/quilt-native/package"
+   ],
+   "relationshipType": "contains"
+  },
+  {
+   "type": "Relationship",
+   "spdxId": "http://spdx.org/spdxdocs/rel/2",
+   "creationInfo": "_:CreationInfo1",
+   "from": "http://spdx.org/spdxdocs/busybox/package",
+   "to": [
+    "http://spdx.org/spdxdocs/license/gpl2"
+   ],
+   "relationshipType": "hasDeclaredLicense"
+  },
+  {
+   "type": "Relationship",
+   "spdxId": "http://spdx.org/spdxdocs/rel/3",
+   "creationInfo": "_:CreationInfo1",
+   "from": "http://spdx.org/spdxdocs/busybox/recipe",
+   "to": [
+    "http://spdx.org/spdxdocs/busybox/package"
+   ],
+   "relationshipType": "generates"
+  },
+  {
+   "type": "Relationship",
+   "spdxId": "http://spdx.org/spdxdocs/rel/4",
+   "creationInfo": "_:CreationInfo1",
+   "from": "http://spdx.org/spdxdocs/zlib/recipe",
+   "to": [
+    "http://spdx.org/spdxdocs/zlib/package"
+   ],
+   "relationshipType": "generates"
+  },
+  {
+   "type": "Relationship",
+   "spdxId": "http://spdx.org/spdxdocs/rel/5",
+   "creationInfo": "_:CreationInfo1",
+   "from": "http://spdx.org/spdxdocs/openssl/recipe",
+   "to": [
+    "http://spdx.org/spdxdocs/openssl/package"
+   ],
+   "relationshipType": "generates"
+  },
+  {
+   "type": "Relationship",
+   "spdxId": "http://spdx.org/spdxdocs/rel/6",
+   "creationInfo": "_:CreationInfo1",
+   "from": "http://spdx.org/spdxdocs/busybox/package",
+   "to": [
+    "http://spdx.org/spdxdocs/zlib/package"
+   ],
+   "relationshipType": "dependsOn"
+  },
+  {
+   "type": "security_Vulnerability",
+   "spdxId": "http://spdx.org/spdxdocs/vuln/CVE-2023-42364",
+   "creationInfo": "_:CreationInfo1",
+   "externalIdentifier": [
+    {
+     "type": "ExternalIdentifier",
+     "externalIdentifierType": "cve",
+     "identifier": "CVE-2023-42364"
+    }
+   ]
+  },
+  {
+   "type": "security_Vulnerability",
+   "spdxId": "http://spdx.org/spdxdocs/vuln/CVE-2023-42363",
+   "creationInfo": "_:CreationInfo1",
+   "externalIdentifier": [
+    {
+     "type": "ExternalIdentifier",
+     "externalIdentifierType": "cve",
+     "identifier": "CVE-2023-42363"
+    }
+   ]
+  },
+  {
+   "type": "security_Vulnerability",
+   "spdxId": "http://spdx.org/spdxdocs/vuln/CVE-2024-0727",
+   "creationInfo": "_:CreationInfo1",
+   "externalIdentifier": [
+    {
+     "type": "ExternalIdentifier",
+     "externalIdentifierType": "cve",
+     "identifier": "CVE-2024-0727"
+    }
+   ]
+  },
+  {
+   "type": "security_Vulnerability",
+   "spdxId": "http://spdx.org/spdxdocs/vuln/CVE-2023-45853",
+   "creationInfo": "_:CreationInfo1",
+   "externalIdentifier": [
+    {
+     "type": "ExternalIdentifier",
+     "externalIdentifierType": "cve",
+     "identifier": "CVE-2023-45853"
+    }
+   ]
+  },
+  {
+   "type": "security_Vulnerability",
+   "spdxId": "http://spdx.org/spdxdocs/vuln/CVE-2022-37434",
+   "creationInfo": "_:CreationInfo1",
+   "externalIdentifier": [
+    {
+     "type": "ExternalIdentifier",
+     "externalIdentifierType": "cve",
+     "identifier": "CVE-2022-37434"
+    }
+   ]
+  },
+  {
+   "type": "security_VexFixedVulnAssessmentRelationship",
+   "spdxId": "http://spdx.org/spdxdocs/rel/v1",
+   "creationInfo": "_:CreationInfo1",
+   "from": "http://spdx.org/spdxdocs/vuln/CVE-2023-42364",
+   "to": [
+    "http://spdx.org/spdxdocs/busybox/recipe"
+   ],
+   "relationshipType": "fixedIn"
+  },
+  {
+   "type": "security_VexNotAffectedVulnAssessmentRelationship",
+   "spdxId": "http://spdx.org/spdxdocs/rel/v2",
+   "creationInfo": "_:CreationInfo1",
+   "from": "http://spdx.org/spdxdocs/vuln/CVE-2023-42363",
+   "to": [
+    "http://spdx.org/spdxdocs/busybox/recipe"
+   ],
+   "relationshipType": "doesNotAffect",
+   "security_justificationType": "vulnerableCodeNotPresent",
+   "security_statusNotes": "Applet disabled in this image."
+  },
+  {
+   "type": "security_VexAffectedVulnAssessmentRelationship",
+   "spdxId": "http://spdx.org/spdxdocs/rel/v3",
+   "creationInfo": "_:CreationInfo1",
+   "from": "http://spdx.org/spdxdocs/vuln/CVE-2024-0727",
+   "to": [
+    "http://spdx.org/spdxdocs/openssl/recipe"
+   ],
+   "relationshipType": "affects"
+  },
+  {
+   "type": "security_VexNotAffectedVulnAssessmentRelationship",
+   "spdxId": "http://spdx.org/spdxdocs/rel/v4",
+   "creationInfo": "_:CreationInfo1",
+   "from": "http://spdx.org/spdxdocs/vuln/CVE-2023-45853",
+   "to": [
+    "http://spdx.org/spdxdocs/zlib/recipe"
+   ],
+   "relationshipType": "doesNotAffect",
+   "security_justificationType": "vulnerableCodeNotInExecutePath",
+   "security_withdrawnTime": "2026-01-01T00:00:00Z"
+  },
+  {
+   "type": "security_VexFixedVulnAssessmentRelationship",
+   "spdxId": "http://spdx.org/spdxdocs/rel/v5",
+   "creationInfo": "_:CreationInfo1",
+   "from": "http://spdx.org/spdxdocs/vuln/CVE-2022-37434",
+   "to": [
+    "http://spdx.org/spdxdocs/zlib/recipe"
+   ],
+   "relationshipType": "fixedIn"
+  }
+ ]
+}

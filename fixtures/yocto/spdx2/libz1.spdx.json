@@ -1,0 +1,49 @@
+{
+ "SPDXID": "SPDXRef-DOCUMENT",
+ "creationInfo": {
+  "created": "2026-11-01T10:00:00Z",
+  "creators": [
+   "Tool: OpenEmbedded Core create-spdx.bbclass",
+   "Organization: OpenEmbedded ()"
+  ],
+  "licenseListVersion": "3.14"
+ },
+ "dataLicense": "CC0-1.0",
+ "documentNamespace": "http://spdx.org/spdxdoc/libz1-0002",
+ "name": "libz1",
+ "spdxVersion": "SPDX-2.2",
+ "packages": [
+  {
+   "SPDXID": "SPDXRef-PACKAGE-libz1",
+   "name": "libz1",
+   "versionInfo": "1.3.1-r0",
+   "downloadLocation": "NOASSERTION",
+   "licenseDeclared": "Zlib",
+   "licenseConcluded": "Zlib",
+   "copyrightText": "NOASSERTION",
+   "supplier": "Organization: OpenEmbedded ()"
+  }
+ ],
+ "relationships": [
+  {
+   "spdxElementId": "SPDXRef-DOCUMENT",
+   "relatedSpdxElement": "SPDXRef-PACKAGE-libz1",
+   "relationshipType": "DESCRIBES"
+  },
+  {
+   "spdxElementId": "SPDXRef-PACKAGE-libz1",
+   "relatedSpdxElement": "DocumentRef-recipe-zlib:SPDXRef-Recipe-zlib",
+   "relationshipType": "GENERATED_FROM"
+  }
+ ],
+ "externalDocumentRefs": [
+  {
+   "externalDocumentId": "DocumentRef-recipe-zlib",
+   "spdxDocument": "http://spdx.org/spdxdoc/recipe-zlib-0001",
+   "checksum": {
+    "algorithm": "SHA1",
+    "checksumValue": "0000000000000000000000000000000000000000"
+   }
+  }
+ ]
+}

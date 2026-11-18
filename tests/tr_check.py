@@ -114,11 +114,24 @@ def check_sbom(path):
             stack.extend(deps.get(ref, []))
     require(reached == known, f'{label}: components unreachable from the product')
     compositions = doc.get('compositions', [])
-    require(len(compositions) == 1, f'{label}: exactly one composition expected')
-    aggregate = compositions[0].get('aggregate')
-    require(aggregate in ('complete', 'incomplete', 'unknown'), f'{label}: invalid composition aggregate')
-    require((aggregate == 'complete') == (graph_source == 'lockfile'), f'{label}: "complete" only for a lockfile graph')
-    require(set(compositions[0].get('dependencies', [])) == known, f'{label}: composition must cover the product and all components')
+    require(compositions, f'{label}: compositions missing')
+    seen = []
+    for composition in compositions:
+        aggregate = composition.get('aggregate')
+        require(aggregate in ('complete', 'incomplete', 'unknown'), f'{label}: invalid composition aggregate')
+        members = composition.get('dependencies', [])
+        require(members, f'{label}: empty composition')
+        seen.extend(members)
+        if aggregate == 'complete':
+            require(graph_source == 'lockfile', f'{label}: "complete" only for a lockfile graph')
+            by_ref = {c['bom-ref']: c for c in components}
+            for ref in members:
+                if ref == root_ref:
+                    require(all(r in members for r in refs), f'{label}: product complete while components are not')
+                    continue
+                require(str(by_ref[ref].get('purl', '')).startswith('pkg:npm/'), f'{label}: complete component {ref} is not from the npm lockfile')
+                require(all(e in members for e in deps.get(ref, [])), f'{label}: complete component {ref} depends on a component outside the complete set')
+    require(sorted(seen) == sorted(known), f'{label}: every component and the product must be in exactly one composition')
     print(f'PASS TR-03183-2 value check: {label}')
 
 

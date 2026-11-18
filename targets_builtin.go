@@ -83,26 +83,38 @@ func (t syftTarget) Prepare(ctx context.Context, o generateOptions, env Env) (*P
 	return p, func() {}, nil
 }
 
+// npmGraphLockfiles are the root lockfiles from which Syft builds the npm
+// graph: package-lock.json or npm-shrinkwrap.json, lockfile version 2 or 3.
+var npmGraphLockfiles = []string{"npm-shrinkwrap.json", "package-lock.json"}
+
+type npmLockfileHead struct {
+	Name            any            `json:"name"`
+	Version         any            `json:"version"`
+	LockfileVersion int            `json:"lockfileVersion"`
+	Packages        map[string]any `json:"packages"`
+}
+
+// readNPMGraphLockfile reads dir/name when it is a regular v2/v3 lockfile.
+func readNPMGraphLockfile(dir, name string) (npmLockfileHead, bool) {
+	var doc npmLockfileHead
+	path := filepath.Join(dir, name)
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxLockfileBytes {
+		return doc, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || json.Unmarshal(data, &doc) != nil || doc.LockfileVersion < 2 || doc.Packages == nil {
+		return doc, false
+	}
+	return doc, true
+}
+
 // npmLockfileProject reports whether the target has a lockfile v2/v3 and
 // returns its project name and version when they are safe component values.
 func npmLockfileProject(dir string) (name, version string, ok bool) {
-	for _, lock := range []string{"npm-shrinkwrap.json", "package-lock.json"} {
-		path := filepath.Join(dir, lock)
-		info, err := os.Lstat(path)
-		if err != nil || !info.Mode().IsRegular() || info.Size() > maxLockfileBytes {
-			continue
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		var doc struct {
-			Name            any            `json:"name"`
-			Version         any            `json:"version"`
-			LockfileVersion int            `json:"lockfileVersion"`
-			Packages        map[string]any `json:"packages"`
-		}
-		if json.Unmarshal(data, &doc) != nil || doc.LockfileVersion < 2 || doc.Packages == nil {
+	for _, lock := range npmGraphLockfiles {
+		doc, ok := readNPMGraphLockfile(dir, lock)
+		if !ok {
 			continue
 		}
 		if n, err := cleanString(doc.Name, "name", true); err == nil {

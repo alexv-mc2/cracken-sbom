@@ -573,12 +573,45 @@ func applyTR(doc map[string]any, hints map[string]*componentHints, p *Prepared, 
 	}
 	doc["dependencies"] = dependencies
 
-	// Compositions: "complete" only when a lockfile states the whole graph.
-	aggregate := map[GraphSource]string{GraphUnknown: "unknown", GraphPartial: "incomplete", GraphLockfile: "complete"}[graph]
-	quality.GraphCompleteness = aggregate
-	doc["compositions"] = []any{map[string]any{"aggregate": aggregate, "dependencies": toAnySlice(append([]string{productRef}, refs...))}}
-	if graph != GraphLockfile {
-		addGap(quality, "Dependency completeness is "+aggregate+": no lockfile states the whole graph for this target.")
+	// Compositions: "complete" only for components a root lockfile lists and
+	// whose dependencies it lists too. Everything else, and the product unless
+	// every component is covered, is incomplete (engine graph) or unknown.
+	rest := map[GraphSource]string{GraphUnknown: "unknown", GraphPartial: "incomplete", GraphLockfile: "incomplete"}[graph]
+	covered := map[string]bool{}
+	if graph == GraphLockfile {
+		covered = lockfileCoverage(p.ScanRoot, refs, hints, entries)
+	}
+	complete, other := []string{}, []string{}
+	for _, ref := range refs {
+		if covered[ref] {
+			complete = append(complete, ref)
+		} else {
+			other = append(other, ref)
+		}
+	}
+	productComplete := graph == GraphLockfile && len(other) == 0
+	if productComplete {
+		complete = append([]string{productRef}, complete...)
+	} else {
+		other = append([]string{productRef}, other...)
+	}
+	compositions := []any{}
+	if len(complete) > 0 {
+		compositions = append(compositions, map[string]any{"aggregate": "complete", "dependencies": toAnySlice(complete)})
+	}
+	if len(other) > 0 {
+		compositions = append(compositions, map[string]any{"aggregate": rest, "dependencies": toAnySlice(other)})
+	}
+	doc["compositions"] = compositions
+	quality.GraphCompleteness = rest
+	if productComplete {
+		quality.GraphCompleteness = "complete"
+	}
+	switch {
+	case graph != GraphLockfile:
+		addGap(quality, "Dependency completeness is "+rest+": no lockfile states the whole graph for this target.")
+	case !productComplete:
+		addGap(quality, fmt.Sprintf("Dependency completeness: %d of %d components are listed in the root lockfile and marked complete; the others and the product are %s.", len(complete), len(refs), rest))
 	}
 
 	total := len(components)
@@ -602,6 +635,45 @@ func applyTR(doc map[string]any, hints map[string]*componentHints, p *Prepared, 
 		return errors.New("an SBOM must not contain vulnerability information (TR-03183-2 §3.1)")
 	}
 	return nil
+}
+
+// lockfileCoverage returns the components a root npm lockfile v2/v3 lists:
+// npm packages Syft located in that lockfile. A component stays covered only
+// while all of its dependencies are covered, so "complete" never reaches a
+// subgraph the lockfile does not describe (a Python environment, a nested
+// project with another package manager or another lockfile).
+func lockfileCoverage(root string, refs []string, hints map[string]*componentHints, entries map[string][]string) map[string]bool {
+	covered := map[string]bool{}
+	if root == "" {
+		return covered
+	}
+	lockfiles := map[string]bool{}
+	for _, name := range npmGraphLockfiles {
+		if _, ok := readNPMGraphLockfile(root, name); ok {
+			lockfiles["/"+name] = true
+		}
+	}
+	for _, ref := range refs {
+		if h := hints[ref]; h != nil && h.PkgType == "npm" && lockfiles[h.Location] {
+			covered[ref] = true
+		}
+	}
+	for changed := true; changed; {
+		changed = false
+		for _, ref := range refs {
+			if !covered[ref] {
+				continue
+			}
+			for _, dep := range entries[ref] {
+				if !covered[dep] {
+					delete(covered, ref)
+					changed = true
+					break
+				}
+			}
+		}
+	}
+	return covered
 }
 
 func toAnySlice(values []string) []any {

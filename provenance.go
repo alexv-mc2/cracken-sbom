@@ -21,19 +21,31 @@ type ProvenanceContext struct {
 	GeneratedAt      string
 	// Set only for the firmware-image target type.
 	Firmware *FirmwareInfo
+	// Extra outputs next to the SBOM; provenance binds each by SHA-256.
+	Sidecars []OutputFile
+	// Facts a target handler records under "extensions".
+	Extension map[string]any
 }
 
 type Quality struct {
-	InputComponents         int      `json:"input_components"`
-	EmittedComponents       int      `json:"emitted_components"`
-	VersionStringComponents int      `json:"version_string_components"`
-	RemovedFiles            int      `json:"removed_files"`
-	MissingVersions         int      `json:"missing_versions"`
-	MissingLicenses         int      `json:"missing_licenses"`
-	ConvertedLicenseIDs     int      `json:"converted_license_ids"`
-	OmittedLicenseChoices   int      `json:"omitted_license_choices"`
-	AmbiguousLicenses       int      `json:"ambiguous_licenses"`
-	Warnings                []string `json:"warnings"`
+	InputComponents         int `json:"input_components"`
+	EmittedComponents       int `json:"emitted_components"`
+	VersionStringComponents int `json:"version_string_components"`
+	RemovedFiles            int `json:"removed_files"`
+	MissingVersions         int `json:"missing_versions"`
+	MissingLicenses         int `json:"missing_licenses"`
+	ConvertedLicenseIDs     int `json:"converted_license_ids"`
+	OmittedLicenseChoices   int `json:"omitted_license_choices"`
+	AmbiguousLicenses       int `json:"ambiguous_licenses"`
+	// BSI TR-03183-2 coverage of the emitted components.
+	SHA512Components       int      `json:"tr_sha512_components"`
+	FilenameComponents     int      `json:"tr_filename_components"`
+	ManufacturerComponents int      `json:"tr_manufacturer_components"`
+	GraphCompleteness      string   `json:"tr_graph_completeness"`
+	TRGaps                 []string `json:"tr_gaps"`
+	Warnings               []string `json:"warnings"`
+	// The engine graph named components that minimization removed.
+	graphUnresolved bool
 }
 
 var versionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+_-]{0,99}$`)
@@ -47,18 +59,18 @@ func validateContext(ctx ProvenanceContext) (ProvenanceContext, error) {
 	if !digestPattern.MatchString(ctx.ConfigDigest) {
 		return ctx, errors.New("invalid configuration digest")
 	}
-	switch ctx.TargetType {
-	case "dir", "npm", "python", "rootfs", "oci-archive", "docker-archive":
-	case firmwareTargetType:
-		if ctx.Firmware != nil {
-			fw, err := validateFirmware(ctx.Firmware)
-			if err != nil {
-				return ctx, err
-			}
-			ctx.Firmware = fw
-		}
-	default:
+	if _, ok := defaultRegistry.target(ctx.TargetType); !ok {
 		return ctx, errors.New("unsupported target type")
+	}
+	if ctx.Firmware != nil {
+		if ctx.TargetType != firmwareTargetType {
+			return ctx, errors.New("firmware facts belong only to firmware-image")
+		}
+		fw, err := validateFirmware(ctx.Firmware)
+		if err != nil {
+			return ctx, err
+		}
+		ctx.Firmware = fw
 	}
 	if !targetPattern.MatchString(ctx.TargetIdentifier) || suspiciousString(ctx.TargetIdentifier) || strings.Contains(ctx.TargetIdentifier, "..") {
 		return ctx, errors.New("unsafe target identifier; use a release identifier or digest")
@@ -100,6 +112,16 @@ func createProvenance(sbom []byte, ctx ProvenanceContext, quality Quality) ([]by
 	}
 	if ctx.Firmware != nil {
 		result["firmware"] = firmwareProvenance(ctx.Firmware)
+	}
+	if len(ctx.Sidecars) > 0 {
+		outputs := []any{}
+		for _, s := range ctx.Sidecars {
+			outputs = append(outputs, map[string]string{"name": s.Name, "sha256": sha256Hex(s.Data)})
+		}
+		result["extra_outputs"] = outputs
+	}
+	if len(ctx.Extension) > 0 {
+		result["extensions"] = map[string]any{ctx.TargetType: ctx.Extension}
 	}
 	out, err := json.MarshalIndent(result, "", "  ")
 	return append(out, '\n'), err

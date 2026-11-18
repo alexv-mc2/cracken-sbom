@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise real Syft license choices and validate normalized CycloneDX 1.5."""
+"""Exercise real Syft license choices and validate normalized CycloneDX 1.6."""
 import hashlib
 import json
 from pathlib import Path
@@ -47,7 +47,7 @@ def schema_validator(schema_dir: Path) -> Draft7Validator:
         if actual != expected:
             raise AssertionError(f"vendored schema checksum mismatch: {name}")
     resources = []
-    for name in ("bom-1.5.schema.json", "spdx.schema.json", "jsf-0.82.schema.json"):
+    for name in ("bom-1.6.schema.json", "spdx.schema.json", "jsf-0.82.schema.json"):
         schema = json.loads((schema_dir / name).read_text())
         resource = Resource.from_contents(schema, default_specification=DRAFT7)
         resources.extend([
@@ -56,7 +56,7 @@ def schema_validator(schema_dir: Path) -> Draft7Validator:
         ])
     registry = Registry().with_resources(resources)
     return Draft7Validator(
-        json.loads((schema_dir / "bom-1.5.schema.json").read_text()),
+        json.loads((schema_dir / "bom-1.6.schema.json").read_text()),
         registry=registry,
     )
 
@@ -91,11 +91,22 @@ def run_case(
     errors = sorted(schema.iter_errors(document), key=lambda error: str(list(error.path)))
     if errors:
         details = "\n".join(f"{list(error.path)}: {error.message}" for error in errors)
-        raise AssertionError(f"{name}: normalized SBOM failed CycloneDX 1.5 schema:\n{details}")
+        raise AssertionError(f"{name}: normalized SBOM failed CycloneDX 1.6 schema:\n{details}")
     components = [component for component in document["components"] if component["name"] == name]
     if len(components) != 1:
         raise AssertionError(f"{name}: expected exactly one JAR component, got {len(components)}")
-    if components[0].get("licenses") != expected_licenses:
+    actual_licenses = components[0].get("licenses")
+    if actual_licenses is not None:
+        # The TR-03183 layer marks every detected choice as declared by default.
+        stripped = []
+        for entry in actual_licenses:
+            entry = json.loads(json.dumps(entry))
+            holder = entry["license"] if "license" in entry else entry
+            if holder.pop("acknowledgement", None) != "declared":
+                raise AssertionError(f"{name}: licence choice is not acknowledged as declared: {entry!r}")
+            stripped.append(entry)
+        actual_licenses = stripped
+    if actual_licenses != expected_licenses:
         raise AssertionError(
             f"{name}: unexpected normalized choices {components[0].get('licenses')!r}; "
             f"expected {expected_licenses!r}"
@@ -107,7 +118,7 @@ def run_case(
     warnings = " ".join(quality.get("warnings", [])).lower()
     if expected_warning.lower() not in warnings:
         raise AssertionError(f"{name}: expected quality warning was absent: {expected_warning}")
-    print(f"PASS real Syft license choices + CycloneDX 1.5 schema: {name}")
+    print(f"PASS real Syft license choices + CycloneDX 1.6 schema: {name}")
 
 
 def main() -> None:
@@ -116,24 +127,24 @@ def main() -> None:
     cli, syft, schema_dir = map(Path, sys.argv[1:])
     schema = schema_validator(schema_dir)
     mit = ("MIT", "https://spdx.org/licenses/MIT.html")
-    unicode = ("Unicode-3.0", "https://spdx.org/licenses/Unicode-3.0.html")
+    x11 = ("X11-swapped", "https://spdx.org/licenses/X11-swapped.html")
     fsl = ("FSL-1.1-MIT", "https://spdx.org/licenses/FSL-1.1-MIT.html")
     with tempfile.TemporaryDirectory(prefix="cracken-sbom-license-choices-") as temporary:
         work = Path(temporary)
         run_case(
-            cli, syft, schema, work, "unicode-only", [unicode],
-            [{"expression": "Unicode-3.0"}],
+            cli, syft, schema, work, "x11-only", [x11],
+            [{"expression": "X11-swapped"}],
             {"converted_license_ids": 1, "omitted_license_choices": 0, "missing_licenses": 0},
             "preserved as a license expression",
         )
         run_case(
-            cli, syft, schema, work, "mit-and-unicode", [mit, unicode],
+            cli, syft, schema, work, "mit-and-x11", [mit, x11],
             [{"license": {"id": "MIT"}}],
             {"converted_license_ids": 0, "omitted_license_choices": 1, "missing_licenses": 0},
             "unsupported SPDX identifiers were omitted",
         )
         run_case(
-            cli, syft, schema, work, "newer-identifiers", [unicode, fsl],
+            cli, syft, schema, work, "newer-identifiers", [x11, fsl],
             None,
             {"converted_license_ids": 0, "omitted_license_choices": 2, "missing_licenses": 1},
             "unsupported SPDX identifiers were omitted",

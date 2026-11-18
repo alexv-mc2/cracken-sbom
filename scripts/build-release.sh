@@ -30,7 +30,7 @@ for platform in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
     cd "$target"
     SYFT_CHECK_FOR_APP_UPDATE=false "$SYFT" scan file:cracken-sbom \
       --source-name cracken-sbom --source-version "$version" \
-      -o cyclonedx-json@1.5 > "$output/$name.cdx.json"
+      -o cyclonedx-json@1.6 > "$output/$name.cdx.json"
   )
   python3 scripts/package-release.py "$target/cracken-sbom" \
     "$output/$name.cdx.json" "$output/$name.tar.gz" "$SOURCE_DATE_EPOCH"

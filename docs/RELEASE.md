@@ -22,7 +22,7 @@ prereleases. Tags and released assets must not be replaced after distribution.
    commit timestamps and deterministic gzip headers. Binaries and archives are
    reproducible with the same source, Go toolchain, version and timestamp. SBOM
    timestamps and serial numbers vary and are not claimed reproducible.
-5. Scan each exact binary with verified Syft to produce CycloneDX 1.5 and
+5. Scan each exact binary with verified Syft to produce CycloneDX 1.6 and
    validate all four inventories against the pinned official schema offline. Require
    its SHA-256 file evidence and detected Go standard library. Replace only the
    file component's runner path with `cracken-sbom`; preserve its hashes. Syft

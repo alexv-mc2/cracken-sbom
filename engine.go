@@ -19,6 +19,10 @@ import (
 
 const engineVersion = "1.55.0"
 
+// BSI TR-03183-2 v2.1.0 requires CycloneDX 1.6 or later. Syft's default is
+// newer (1.7), which crAcken's VEX import refuses, so the version is pinned.
+const engineOutputFormat = "cyclonedx-json@1.6"
+
 // All network enrichment is explicitly disabled. Remaining defaults are bound
 // by the exact engine version and authenticated per-platform binary digest.
 // Keep missing identities so normalization can fail or report incompleteness;
@@ -66,6 +70,27 @@ type engineManifest struct {
 
 type engineRunner func(context.Context, string, string, string) ([]byte, error)
 
+// engines adapts the scan function (replaceable in tests) and the convert
+// function to the EngineRunner interface extensions use.
+type engines struct {
+	scan    engineRunner
+	convert func(context.Context, string, string) ([]byte, error)
+}
+
+func (e engines) Scan(ctx context.Context, binary, target, source string) ([]byte, error) {
+	if e.scan == nil {
+		return nil, errors.New("engine scan is not available")
+	}
+	return e.scan(ctx, binary, target, source)
+}
+
+func (e engines) Convert(ctx context.Context, binary, inputFile string) ([]byte, error) {
+	if e.convert == nil {
+		return nil, errors.New("engine convert is not available")
+	}
+	return e.convert(ctx, binary, inputFile)
+}
+
 const maxEngineOutput = 64 << 20
 
 // Canonical JSON binds the policy, engine-bound defaults, and non-path scan
@@ -84,7 +109,7 @@ func configurationDigest(targetType string) string {
 		Scope            string `json:"scope"`
 		PrivacyProfile   string `json:"privacy_profile"`
 		GeneratorVersion string `json:"generator_version"`
-	}{engineVersion, engineConfig, "cyclonedx-json@1.5", source, "squashed", privacyProfile, toolVersion}
+	}{engineVersion, engineConfig, engineOutputFormat, source, "squashed", privacyProfile, toolVersion}
 	data, _ := json.Marshal(policy)
 	return sha256Hex(data)
 }
@@ -152,6 +177,45 @@ func runEngine(ctx context.Context, binary, target, targetType string) ([]byte, 
 }
 
 func runEngineWithManifest(ctx context.Context, binary, target, targetType string, manifest engineManifest) ([]byte, error) {
+	source := targetType
+	switch targetType {
+	case "dir", "rootfs", "npm", "python":
+		source = "dir"
+	case "oci-archive", "docker-archive":
+	default:
+		return nil, errors.New("unsupported local target type")
+	}
+	args := []string{"scan", source + ":" + target, "--output", engineOutputFormat, "--quiet"}
+	if source == "dir" {
+		args = append(args, "--base-path", target)
+	}
+	return runIsolatedEngine(ctx, binary, manifest, args, "engine scan")
+}
+
+// runConvert converts a local SBOM file (SPDX 2.x or 3.0 JSON, or another
+// format Syft decodes) to CycloneDX 1.6 with the same authenticated engine.
+func runConvert(ctx context.Context, binary, inputFile string) ([]byte, error) {
+	var manifest engineManifest
+	if json.Unmarshal(engineManifestJSON, &manifest) != nil {
+		return nil, errors.New("invalid embedded engine manifest")
+	}
+	return runConvertWithManifest(ctx, binary, inputFile, manifest)
+}
+
+func runConvertWithManifest(ctx context.Context, binary, inputFile string, manifest engineManifest) ([]byte, error) {
+	if !filepath.IsAbs(inputFile) || strings.HasPrefix(filepath.Base(inputFile), "-") {
+		return nil, errors.New("convert input must be an absolute local file path")
+	}
+	info, err := os.Lstat(inputFile)
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, errors.New("convert input must be an existing regular file")
+	}
+	return runIsolatedEngine(ctx, binary, manifest, []string{"convert", inputFile, "--output", engineOutputFormat, "--quiet"}, "engine convert")
+}
+
+// runIsolatedEngine copies the engine into a private directory, authenticates
+// the copy, verifies its exact version and runs it with the fixed policy.
+func runIsolatedEngine(ctx context.Context, binary string, manifest engineManifest, args []string, what string) ([]byte, error) {
 	work, err := os.MkdirTemp("", "cracken-sbom-engine-")
 	if err != nil {
 		return nil, errors.New("cannot create isolated engine workspace")
@@ -211,33 +275,24 @@ func runEngineWithManifest(ctx context.Context, binary, target, targetType strin
 	if json.Unmarshal(versionOut.Bytes(), &identity) != nil || strings.TrimPrefix(identity.Version, "v") != engineVersion {
 		return nil, errors.New("engine version does not match exact pin")
 	}
-	source := targetType
-	switch targetType {
-	case "dir", "rootfs", "npm", "python":
-		source = "dir"
-	case "oci-archive", "docker-archive":
-	default:
-		return nil, errors.New("unsupported local target type")
-	}
-	args := []string{"scan", source + ":" + target, "--config", config, "--output", "cyclonedx-json@1.5", "--quiet"}
-	if source == "dir" {
-		args = append(args, "--base-path", target)
-	}
-	scanCtx, cancelScan := context.WithTimeout(ctx, 10*time.Minute)
-	defer cancelScan()
-	cmd := exec.CommandContext(scanCtx, binary, args...)
+	// The subcommand and its first operand stay first; the fixed configuration
+	// follows so that test doubles can check positional arguments.
+	full := append([]string{args[0], args[1], "--config", config}, args[2:]...)
+	runCtx, cancelRun := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancelRun()
+	cmd := exec.CommandContext(runCtx, binary, full...)
 	cmd.Dir, cmd.Env = work, isolatedEnvironment(work)
 	out := &cappedBuffer{limit: maxEngineOutput}
 	cmd.Stdout, cmd.Stderr = out, io.Discard
 	cmd.WaitDelay = 2 * time.Second
 	if err := cmd.Run(); err != nil {
-		if scanCtx.Err() != nil {
-			return nil, errors.New("engine scan timed out or was cancelled")
+		if runCtx.Err() != nil {
+			return nil, errors.New(what + " timed out or was cancelled")
 		}
 		if out.overflow {
 			return nil, errors.New("engine output exceeds 64 MiB safety limit")
 		}
-		return nil, errors.New("engine scan failed; no output was published")
+		return nil, errors.New(what + " failed; no output was published")
 	}
 	return out.Bytes(), nil
 }

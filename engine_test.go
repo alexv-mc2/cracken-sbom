@@ -43,10 +43,10 @@ grep -q 'check-for-app-update: false' "$4" || exit 28
 grep -q 'vcpkg-allow-git-clone: false' "$4" || exit 29
 grep -q 'missing-version: keep' "$4" || exit 30
 test "$5" = '--output' || exit 31
-test "$6" = 'cyclonedx-json@1.5' || exit 32
+test "$6" = 'cyclonedx-json@1.6' || exit 32
 test "$8" = '--base-path' || exit 33
 test "$9" = '/local/rootfs' || exit 34
-printf '{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]}'
+printf '{"bomFormat":"CycloneDX","specVersion":"1.6","components":[]}'
 `)
 	out, err := runEngineWithManifest(context.Background(), file, "/local/rootfs", "rootfs", manifest)
 	if err != nil || !bytes.Contains(out, []byte("CycloneDX")) {
@@ -145,5 +145,30 @@ func TestEngineVersionProcessFailureRemainsDistinctFromStartFailure(t *testing.T
 	_, err := runEngineWithManifest(context.Background(), file, "/private/target", "rootfs", manifest)
 	if err == nil || err.Error() != "cannot verify pinned engine version" {
 		t.Fatal("started engine failure was not reported as version verification failure")
+	}
+}
+
+func TestEngineConvertUsesPinnedFormatAndIsolatedEngine(t *testing.T) {
+	input := filepath.Join(t.TempDir(), "rootfs.spdx.json")
+	if os.WriteFile(input, []byte(`{"spdxVersion":"SPDX-2.2"}`), 0600) != nil {
+		t.Fatal("fixture")
+	}
+	file, manifest := mockEngine(t, `
+if [ "$1" = "version" ]; then printf '{"version":"1.55.0"}'; exit 0; fi
+test "$1" = "convert" || exit 41
+test "$2" = '`+input+`' || exit 42
+test "$3" = '--config' || exit 43
+test "$5" = '--output' || exit 44
+test "$6" = 'cyclonedx-json@1.6' || exit 45
+printf '{"bomFormat":"CycloneDX","specVersion":"1.6","components":[]}'
+`)
+	out, err := runConvertWithManifest(context.Background(), file, input, manifest)
+	if err != nil || !bytes.Contains(out, []byte(`"1.6"`)) {
+		t.Fatalf("convert: %v", err)
+	}
+	for _, bad := range []string{"relative.spdx.json", filepath.Dir(input), "-flag.json"} {
+		if _, err := runConvertWithManifest(context.Background(), file, bad, manifest); err == nil {
+			t.Errorf("convert accepted %q", bad)
+		}
 	}
 }

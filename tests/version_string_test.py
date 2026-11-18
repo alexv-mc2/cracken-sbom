@@ -11,6 +11,11 @@ import sys
 DETECTION_PROPERTY = {"name": "cracken:detection:method", "value": "version-string"}
 
 
+def detection_properties(component):
+    """Generator properties other than the BSI TR-03183 taxonomy flags."""
+    return [p for p in component.get("properties", []) if not p.get("name", "").startswith("bsi:")]
+
+
 def run(command, env):
     try:
         result = subprocess.run(command, env=env, text=True, capture_output=True, timeout=120)
@@ -94,7 +99,7 @@ def main():
         raise AssertionError("base fixture must have zero version-string components")
     if {c.get("name") for c in baseline_components} != {"busybox", "libssl3", "debian"}:
         raise AssertionError("base fixture must contain dpkg busybox, libssl3 and the OS")
-    if any(c.get("properties") for c in baseline_components):
+    if any(detection_properties(c) for c in baseline_components):
         raise AssertionError("base fixture components must have no detection properties")
 
     write_stub(binary_rootfs / "bin/busybox", b"BusyBox v1.36.1 (2023-11-07 18:53:09 UTC)")
@@ -112,12 +117,12 @@ def main():
     marked = [c for c in components if DETECTION_PROPERTY in c.get("properties", [])]
     if {(c.get("name"), c.get("version")) for c in marked} != expected or len(marked) != 5:
         raise AssertionError("expected five version-string components")
-    if any(c.get("properties") != [DETECTION_PROPERTY] for c in marked):
+    if any(detection_properties(c) != [DETECTION_PROPERTY] for c in marked):
         raise AssertionError("binary components must carry exactly the safe detection property")
     unmarked = [c for c in components if c not in marked]
     if identities({"components": unmarked}) != identities(baseline):
         raise AssertionError("binary stubs changed the original dpkg or OS component identities")
-    if any(c.get("properties") for c in unmarked):
+    if any(detection_properties(c) for c in unmarked):
         raise AssertionError("dpkg busybox/libssl3 and OS components must have no detection property")
     if quality.get("version_string_components") != 5:
         raise AssertionError("quality must count exactly 5 version-string components")

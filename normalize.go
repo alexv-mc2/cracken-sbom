@@ -21,7 +21,7 @@ var purlQualifierVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+_~
 var licenseExpressionPattern = regexp.MustCompile(`^[A-Za-z0-9(][A-Za-z0-9.+_() -]*$`)
 var credentialPattern = regexp.MustCompile(`(?i)(password|passwd|token|secret|api[_-]?key|credential|authorization)\s*[:=]`)
 
-// The output's exact CycloneDX 1.5 schema, not the engine's newer SPDX list,
+// The output's exact CycloneDX 1.6 schema, not the engine's newer SPDX list,
 // decides which license.id values are valid. This is data, not a scanner.
 //
 //go:embed tests/schema/spdx.schema.json
@@ -249,7 +249,21 @@ func cleanCPE(v any) (string, error) {
 	return "", errors.New("invalid component cpe")
 }
 
+// componentHints carries engine facts the minimized component does not keep
+// verbatim but the TR-03183 layer needs. Location is a path inside the scanned
+// target; it is used only to read lockfiles and hash cataloged files there and
+// is never written to any output.
+type componentHints struct {
+	PkgType, FoundBy, Location string
+	Name, Group, Version       string
+	Creator                    creatorFacts
+}
+
 func normalizeComponent(c map[string]any, ref string, quality *Quality) (map[string]any, error) {
+	return normalizeComponentWithHints(c, ref, quality, &componentHints{})
+}
+
+func normalizeComponentWithHints(c map[string]any, ref string, quality *Quality, hints *componentHints) (map[string]any, error) {
 	typeName, ok := c["type"].(string)
 	allowedTypes := map[string]bool{"application": true, "framework": true, "library": true, "container": true, "operating-system": true, "device": true, "firmware": true}
 	if !ok || !allowedTypes[typeName] {
@@ -260,6 +274,8 @@ func normalizeComponent(c map[string]any, ref string, quality *Quality) (map[str
 		return nil, err
 	}
 	out := map[string]any{"type": typeName, "name": name, "bom-ref": ref}
+	hints.Name = name
+	hints.Creator = componentCreator(c)
 	for _, field := range []string{"group", "version", "cpe"} {
 		v, present := c[field]
 		if !present || v == nil || v == "" {
@@ -283,6 +299,12 @@ func normalizeComponent(c map[string]any, ref string, quality *Quality) (map[str
 			continue
 		}
 		out[field] = s
+		switch field {
+		case "group":
+			hints.Group = s
+		case "version":
+			hints.Version = s
+		}
 	}
 	if v, exists := c["purl"]; exists {
 		purl, err := cleanPURL(v)
@@ -354,15 +376,15 @@ func normalizeComponent(c map[string]any, ref string, quality *Quality) (map[str
 			licenses = append(licenses, map[string]string{"expression": expressionChoices[0]})
 			if convertedIDs == 1 {
 				quality.ConvertedLicenseIDs++
-				addWarning(quality, "An SPDX identifier outside the CycloneDX 1.5 identifier list was preserved as a license expression.")
+				addWarning(quality, "An SPDX identifier outside the CycloneDX 1.6 identifier list was preserved as a license expression.")
 			}
 		case len(expressionChoices) > 0:
 			quality.OmittedLicenseChoices += len(expressionChoices)
 			if convertedIDs > 0 {
-				addWarning(quality, "Unsupported SPDX identifiers were omitted because CycloneDX 1.5 cannot combine identifier expressions with other license choices.")
+				addWarning(quality, "Unsupported SPDX identifiers were omitted because CycloneDX 1.6 cannot combine identifier expressions with other license choices.")
 			}
 			if len(expressionChoices) > convertedIDs {
-				addWarning(quality, "License expressions were omitted because CycloneDX 1.5 permits only one expression and cannot combine it with license entries.")
+				addWarning(quality, "License expressions were omitted because CycloneDX 1.6 permits only one expression and cannot combine it with license entries.")
 			}
 		}
 		if len(licenses) > 0 {
@@ -421,6 +443,14 @@ func normalizeComponent(c map[string]any, ref string, quality *Quality) (map[str
 			if name == "syft:package:foundBy" && (value == "binary-classifier-cataloger" || value == "cracken-embedded-version-detector") {
 				versionString = true
 			}
+			switch name {
+			case "syft:package:foundBy":
+				hints.FoundBy = value
+			case "syft:package:type":
+				hints.PkgType = value
+			case "syft:location:0:path":
+				hints.Location = value
+			}
 		}
 		if versionString {
 			// Synthesize a fixed marker; never copy engine properties or locations.
@@ -440,31 +470,44 @@ func addWarning(quality *Quality, warning string) {
 	quality.Warnings = append(quality.Warnings, warning)
 }
 
+// normalizeSBOM minimizes engine CycloneDX 1.6 JSON without the TR-03183 layer.
 func normalizeSBOM(input []byte, ctx ProvenanceContext) ([]byte, Quality, error) {
-	quality := Quality{Warnings: []string{}}
-	ctx, err := validateContext(ctx)
+	doc, _, quality, err := normalizeDocument(input, ctx)
 	if err != nil {
 		return nil, quality, err
 	}
+	encoded, err := encodeSBOM(doc)
+	return encoded, quality, err
+}
+
+// normalizeDocument returns the minimized document as generic JSON values
+// together with per-component engine hints keyed by the new bom-ref.
+func normalizeDocument(input []byte, ctx ProvenanceContext) (map[string]any, map[string]*componentHints, Quality, error) {
+	quality := Quality{Warnings: []string{}, TRGaps: []string{}}
+	ctx, err := validateContext(ctx)
+	if err != nil {
+		return nil, nil, quality, err
+	}
+	hintsByRef := map[string]*componentHints{}
 	var root map[string]any
 	dec := json.NewDecoder(strings.NewReader(string(input)))
 	if err := dec.Decode(&root); err != nil {
-		return nil, quality, errors.New("malformed CycloneDX JSON")
+		return nil, nil, quality, errors.New("malformed CycloneDX JSON")
 	}
 	if dec.Decode(new(any)) != io.EOF {
-		return nil, quality, errors.New("trailing CycloneDX JSON data")
+		return nil, nil, quality, errors.New("trailing CycloneDX JSON data")
 	}
-	if root["bomFormat"] != "CycloneDX" || root["specVersion"] != "1.5" {
-		return nil, quality, errors.New("only CycloneDX 1.5 is supported")
+	if root["bomFormat"] != "CycloneDX" || root["specVersion"] != "1.6" {
+		return nil, nil, quality, errors.New("only CycloneDX 1.6 engine output is supported")
 	}
 	// CycloneDX permits omitting components entirely. Syft uses that valid
 	// representation for an empty target; it must fail as empty, never clean.
 	if _, exists := root["components"]; !exists {
-		return nil, quality, errors.New("empty_sbom: no package components")
+		return nil, nil, quality, errors.New("empty_sbom: no package components")
 	}
 	list, ok := root["components"].([]any)
 	if !ok {
-		return nil, quality, errors.New("missing or malformed component inventory")
+		return nil, nil, quality, errors.New("missing or malformed component inventory")
 	}
 	components := []any{}
 	refs := map[string]string{}
@@ -481,17 +524,17 @@ func normalizeSBOM(input []byte, ctx ProvenanceContext) ([]byte, Quality, error)
 		stack[top] = stack[top][1:]
 		c, ok := v.(map[string]any)
 		if !ok {
-			return nil, quality, errors.New("malformed component entry")
+			return nil, nil, quality, errors.New("malformed component entry")
 		}
 		quality.InputComponents++
 		if quality.InputComponents > maxComponents {
-			return nil, quality, errors.New("component inventory exceeds 50000 entries")
+			return nil, nil, quality, errors.New("component inventory exceeds 50000 entries")
 		}
 		oldRef := ""
 		if r, exists := c["bom-ref"]; exists {
 			oldRef, ok = r.(string)
 			if !ok || oldRef == "" || seenRefs[oldRef] {
-				return nil, quality, errors.New("invalid or duplicate component reference")
+				return nil, nil, quality, errors.New("invalid or duplicate component reference")
 			}
 			seenRefs[oldRef] = true
 		}
@@ -499,11 +542,13 @@ func normalizeSBOM(input []byte, ctx ProvenanceContext) ([]byte, Quality, error)
 			quality.RemovedFiles++
 		} else {
 			ref := fmt.Sprintf("component-%d", len(components)+1)
-			out, err := normalizeComponent(c, ref, &quality)
+			hints := &componentHints{}
+			out, err := normalizeComponentWithHints(c, ref, &quality, hints)
 			if err != nil {
-				return nil, quality, err
+				return nil, nil, quality, err
 			}
 			components = append(components, out)
+			hintsByRef[ref] = hints
 			if oldRef != "" {
 				refs[oldRef] = ref
 			}
@@ -511,14 +556,14 @@ func normalizeSBOM(input []byte, ctx ProvenanceContext) ([]byte, Quality, error)
 		if children, exists := c["components"]; exists {
 			children, ok := children.([]any)
 			if !ok {
-				return nil, quality, errors.New("malformed nested component inventory")
+				return nil, nil, quality, errors.New("malformed nested component inventory")
 			}
 			stack = append(stack, children)
 		}
 	}
 	quality.EmittedComponents = len(components)
 	if len(components) == 0 {
-		return nil, quality, errors.New("empty_sbom: no package components")
+		return nil, nil, quality, errors.New("empty_sbom: no package components")
 	}
 	if ctx.TargetType == "dir" {
 		quality.Warnings = append(quality.Warnings, "This source tree inventory is not evidence of shipped components.")
@@ -534,17 +579,17 @@ func normalizeSBOM(input []byte, ctx ProvenanceContext) ([]byte, Quality, error)
 	if v, exists := root["dependencies"]; exists {
 		list, ok := v.([]any)
 		if !ok {
-			return nil, quality, errors.New("malformed dependency graph")
+			return nil, nil, quality, errors.New("malformed dependency graph")
 		}
 		seenNodes := map[string]bool{}
 		for _, v := range list {
 			dep, ok := v.(map[string]any)
 			if !ok {
-				return nil, quality, errors.New("malformed dependency entry")
+				return nil, nil, quality, errors.New("malformed dependency entry")
 			}
 			r, ok := dep["ref"].(string)
 			if !ok {
-				return nil, quality, errors.New("malformed dependency reference")
+				return nil, nil, quality, errors.New("malformed dependency reference")
 			}
 			ref, exists := refs[r]
 			if !exists {
@@ -552,20 +597,20 @@ func normalizeSBOM(input []byte, ctx ProvenanceContext) ([]byte, Quality, error)
 				continue
 			}
 			if seenNodes[ref] {
-				return nil, quality, errors.New("duplicate dependency node")
+				return nil, nil, quality, errors.New("duplicate dependency node")
 			}
 			seenNodes[ref] = true
 			edges := []string{}
 			if v, exists := dep["dependsOn"]; exists {
 				list, ok := v.([]any)
 				if !ok {
-					return nil, quality, errors.New("malformed dependency edges")
+					return nil, nil, quality, errors.New("malformed dependency edges")
 				}
 				seen := map[string]bool{}
 				for _, v := range list {
 					r, ok := v.(string)
 					if !ok {
-						return nil, quality, errors.New("malformed dependency edge reference")
+						return nil, nil, quality, errors.New("malformed dependency edge reference")
 					}
 					if rewritten, exists := refs[r]; exists {
 						if !seen[rewritten] {
@@ -602,18 +647,20 @@ func normalizeSBOM(input []byte, ctx ProvenanceContext) ([]byte, Quality, error)
 			properties = append(properties, map[string]string{"name": p[0], "value": p[1]})
 		}
 	}
-	out := map[string]any{"bomFormat": "CycloneDX", "specVersion": "1.5", "version": 1, "components": components,
+	out := map[string]any{"bomFormat": "CycloneDX", "specVersion": "1.6", "version": 1, "components": components,
 		"metadata": map[string]any{"timestamp": ctx.GeneratedAt, "tools": []any{map[string]string{"name": "cracken-sbom", "version": ctx.ToolVersion}, map[string]string{"name": "syft", "version": ctx.EngineVersion}}, "properties": properties}}
 	if len(dependencies) > 0 {
 		out["dependencies"] = dependencies
 	}
-	encoded, err := json.MarshalIndent(out, "", "  ")
+	quality.graphUnresolved = unresolved
+	// Return uniform generic JSON values for the TR layer.
+	encoded, err := json.Marshal(out)
 	if err != nil {
-		return nil, quality, errors.New("cannot encode minimized SBOM")
+		return nil, nil, quality, errors.New("cannot encode minimized SBOM")
 	}
-	encoded = append(encoded, '\n')
-	if len(encoded) > maxSBOMBytes {
-		return nil, quality, errors.New("minimized SBOM exceeds 16 MiB uncompressed ZIP limit")
+	var generic map[string]any
+	if err := json.Unmarshal(encoded, &generic); err != nil {
+		return nil, nil, quality, errors.New("cannot encode minimized SBOM")
 	}
-	return encoded, quality, nil
+	return generic, hintsByRef, quality, nil
 }

@@ -17,6 +17,44 @@ Scan the shipped artifact and review the quality file. An inventory does not
 establish completeness, absence of vulnerabilities or regulatory conformity.
 
 <!-- where-to-start:begin -->
+## Where to start
+
+Not sure which command fits your project? Run the generator with no arguments
+in the folder, or name the folder or file:
+
+```sh
+./cracken-sbom                          # looks at the current folder
+./cracken-sbom detect /work/firmware.bin
+./cracken-sbom detect /work/app --dry-run   # say what would run, build nothing
+```
+
+`detect` works on your computer only and never uses the network. It looks at
+file names (and, for single files, the first bytes), says in plain words what
+it found and the exact `generate` command it will run, then builds the SBOM
+through that command. It finds the pinned Syft next to `cracken-sbom`, in your
+`PATH` or in the cache folder (`~/Library/Caches/cracken-sbom` on macOS,
+`~/.cache/cracken-sbom` on Linux) and checks it against the pinned SHA-256; if
+there is none, it says how to install it. The output is a new folder next to
+what you scanned (`<name>-sbom-<time>`) unless you pass `--output`; the release
+identifier is the folder's git commit, else `local-<time>`, unless you pass
+`--target-id`. The `generate` flags for product and manufacturer facts are
+passed through unchanged.
+
+| What you have | What detect recognises | What it runs |
+|---|---|---|
+| Source project with lockfiles (npm, pnpm, yarn, Go, Cargo, Maven, Gradle, NuGet, Poetry, uv, Composer, Bundler, ...) | the manifests and lockfiles the pinned Syft reads (table generated from Syft's own cataloger list) | `generate --target-type npm` for an npm project with `package-lock.json`, otherwise `--target-type dir` |
+| Installed Python packages (`site-packages`) | `*.dist-info/METADATA` | `generate --target-type python` |
+| Unpacked firmware root filesystem | `etc/` plus a package database (dpkg/opkg, apk, rpm, pacman) | `generate --target-type rootfs` |
+| Container image | a `docker save` archive (`manifest.json`) or an OCI layout (`oci-layout`, `index.json`) in a `.tar` | `generate --target-type docker-archive` or `oci-archive` |
+| Firmware image (`.bin`, `.img`, ...) | SquashFS, UBI, uImage, FIT, ext4, EROFS, CramFS, JFFS2, cpio, TRX and other signatures; magic numbers from binwalk and unblob | `generate --target-type firmware-image` with unblob or binwalk found in `PATH` ([Firmware images](#firmware-images)) |
+| Yocto build folder | `conf/local.conf`, `tmp/deploy/spdx` | builds nothing yet: points to the SPDX SBOM your build already writes ([Yocto guide](docs/YOCTO.md)) |
+| Only a `Dockerfile` | the recipe, not the image | builds nothing: shows how to `docker save` the image and run detect on the archive |
+
+Exit code 0 means an SBOM was built, or detect explained the next step without
+building one (Yocto, Dockerfile, an npm project without a lockfile). Exit code
+1 means it found nothing it can list, or something is missing (Syft, an
+extractor, a path). `cracken-sbom --help` and `cracken-sbom COMMAND --help`
+list every flag.
 <!-- where-to-start:end -->
 
 ## How it works and why your code stays with you

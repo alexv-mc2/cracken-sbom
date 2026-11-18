@@ -19,9 +19,81 @@ import (
 	"time"
 )
 
-const usage = "invalid flags; use generate --target-type TYPE --target PATH --target-id ID --output NEW-DIR [--syft ABSOLUTE-BINARY] [--allow-incomplete] [--zip] [--extractor ABSOLUTE-BINARY [--extractor-kind unblob|binwalk] [--work-dir ABSOLUTE-DIR]] " +
+const usage = "generate --target-type TYPE --target PATH --target-id ID --output NEW-DIR [--syft ABSOLUTE-BINARY] [--allow-incomplete] [--zip] [--extractor ABSOLUTE-BINARY [--extractor-kind unblob|binwalk] [--work-dir ABSOLUTE-DIR]] " +
 	"[--product-name NAME --product-version VERSION --product-license SPDX-EXPRESSION] [--manufacturer-name NAME --manufacturer-email EMAIL|--manufacturer-url URL] [--metadata FILE.json] [--artifact FILE] [--conclude-licenses] [--component-contacts]; " +
 	"--zip or automatic ZIP for SBOMs over 10 MiB: crAcken web app's SPDX upload method (ZIP archive) or public API (application/zip)"
+
+// errHelpRequested is returned by a subcommand's flag parsing for -h/--help;
+// runCLI prints that command's help and exits successfully.
+var errHelpRequested = errors.New("help requested")
+
+var flagNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,40}$`)
+
+// flagError turns a flag package error into a message that names the flag but
+// never echoes a supplied value (values can be tokens or private paths).
+func flagError(command string, err error) error {
+	if errors.Is(err, flag.ErrHelp) {
+		return errHelpRequested
+	}
+	msg, name := err.Error(), ""
+	text := "invalid flags"
+	for _, p := range []struct{ prefix, text string }{
+		{"flag provided but not defined: -", "unknown flag --%s"},
+		{"flag needs an argument: -", "flag --%s needs a value"},
+	} {
+		if strings.HasPrefix(msg, p.prefix) {
+			name, text = strings.TrimPrefix(msg, p.prefix), p.text
+		}
+	}
+	if strings.HasPrefix(msg, "invalid ") {
+		if i := strings.Index(msg, " for flag -"); i >= 0 {
+			name, text = msg[i+len(" for flag -"):], "invalid value for flag --%s"
+			if j := strings.Index(name, ":"); j >= 0 {
+				name = name[:j]
+			}
+		}
+	}
+	if strings.HasPrefix(msg, "bad flag syntax") {
+		text = "bad flag syntax"
+	}
+	name = strings.TrimPrefix(name, "-")
+	if strings.Contains(text, "%s") {
+		if !flagNamePattern.MatchString(name) {
+			text, name = strings.ReplaceAll(text, " --%s", ""), ""
+		} else {
+			text = fmt.Sprintf(text, name)
+		}
+	}
+	return fmt.Errorf("%s; run cracken-sbom %s --help", text, command)
+}
+
+func generateHelp() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Usage: cracken-sbom %s\n\n", strings.SplitN(usage, ";", 2)[0])
+	fmt.Fprintf(&b, "Target types: %s.\n", joinChoices(defaultRegistry.targetTypes()))
+	fmt.Fprintln(&b, "--syft may be omitted when the pinned Syft is next to cracken-sbom, in PATH or in the cache folder.")
+	fmt.Fprintln(&b, "--zip, or automatic ZIP for SBOMs over 10 MiB: use the crAcken web app's SPDX upload method \"ZIP archive\" or the public API with Content-Type: application/zip.")
+	fmt.Fprintln(&b, "Not sure which target type? Run cracken-sbom detect PATH; it tells you and runs the right command.")
+	return b.String()
+}
+
+func topHelp() string {
+	var b strings.Builder
+	fmt.Fprintln(&b, "cracken-sbom builds a CycloneDX 1.6 SBOM on this computer with the pinned Syft "+engineVersion+". Nothing is uploaded.")
+	fmt.Fprintln(&b)
+	fmt.Fprintln(&b, "Usage:")
+	if d, ok := defaultRegistry.defaultSubcommand(); ok {
+		fmt.Fprintf(&b, "  cracken-sbom                 same as: cracken-sbom %s .\n", d.Name)
+	}
+	for _, ext := range defaultRegistry.extensions() {
+		for _, c := range ext.Subcommands {
+			fmt.Fprintf(&b, "  cracken-sbom %-15s %s\n", c.Name, c.Summary)
+		}
+	}
+	fmt.Fprintln(&b)
+	fmt.Fprintln(&b, "Run cracken-sbom COMMAND --help for the flags of one command.")
+	return b.String()
+}
 
 // Release builds bind this value to their exact tag with -ldflags -X.
 var toolVersion = "1.1.0"
@@ -94,8 +166,12 @@ func parseOptions(args []string) (generateOptions, error) {
 			extraString[name] = fs.String(name, "", e.Flag.Usage)
 		}
 	}
-	if fs.Parse(args) != nil || fs.NArg() != 0 {
-		return o, errors.New(usage)
+	if err := fs.Parse(args); err != nil {
+		return o, flagError("generate", err)
+	}
+	if fs.NArg() != 0 {
+		// The value itself is not echoed: it can be a token or a private path.
+		return o, fmt.Errorf("generate takes no positional arguments (%d given); every value needs its flag, for example --target PATH; run cracken-sbom generate --help", fs.NArg())
 	}
 	var extraErr error
 	fs.Visit(func(f *flag.Flag) {
@@ -124,8 +200,20 @@ func parseOptions(args []string) (generateOptions, error) {
 			}
 		}
 	}
-	if o.target == "" || o.targetID == "" || o.output == "" || !filepath.IsAbs(o.syft) {
-		return o, errors.New("required flags are missing or engine path is not absolute")
+	missing := []string{}
+	for _, f := range []struct{ name, value string }{{"--target-type", o.targetType}, {"--target", o.target}, {"--target-id", o.targetID}, {"--output", o.output}} {
+		if f.value == "" {
+			missing = append(missing, f.name)
+		}
+	}
+	if len(missing) > 0 {
+		return o, fmt.Errorf("missing %s; run cracken-sbom generate --help, or cracken-sbom detect PATH to choose them for you", strings.Join(missing, ", "))
+	}
+	if o.syft == "" {
+		return o, engineNotFoundError()
+	}
+	if !filepath.IsAbs(o.syft) {
+		return o, errors.New("--syft must be an absolute path to the Syft binary")
 	}
 	handler, ok := defaultRegistry.target(o.targetType)
 	if !ok {
@@ -163,7 +251,7 @@ func validatePaths(o *generateOptions) error {
 	}
 	target, info, err := canonicalExisting(o.target)
 	if err != nil {
-		return err
+		return errors.New("--target: " + err.Error())
 	}
 	handler, ok := defaultRegistry.target(o.targetType)
 	if !ok {
@@ -171,33 +259,37 @@ func validatePaths(o *generateOptions) error {
 	}
 	wantDir := handler.Kind() == TargetDirectory
 	if (wantDir && !info.IsDir()) || (!wantDir && !info.Mode().IsRegular()) {
-		return errors.New("target filesystem type does not match declared target type")
+		want := "a folder"
+		if !wantDir {
+			want = "a regular file"
+		}
+		return fmt.Errorf("--target must be %s for --target-type %s", want, o.targetType)
 	}
 	engine, engineInfo, err := canonicalExisting(o.syft)
 	if err != nil || !engineInfo.Mode().IsRegular() || engineInfo.Mode()&0111 == 0 {
-		return errors.New("engine must be an existing regular executable")
+		return errors.New("--syft: the engine must be an existing regular executable, not a symbolic link")
 	}
 	outAbs, err := filepath.Abs(o.output)
 	if err != nil || filepath.Clean(outAbs) == string(filepath.Separator) {
-		return errors.New("invalid output directory")
+		return errors.New("--output: invalid output directory")
 	}
 	// Canonicalize the parent once, including OS aliases such as /tmp on macOS.
 	// The final output itself must remain absent, including dangling symlinks.
 	parent, err := filepath.EvalSymlinks(filepath.Dir(outAbs))
 	if err != nil {
-		return errors.New("output parent must be an existing local directory")
+		return errors.New("--output: the parent folder must be an existing local directory")
 	}
 	parentInfo, err := os.Stat(parent)
 	if err != nil || !parentInfo.IsDir() {
-		return errors.New("output parent must be an existing local directory")
+		return errors.New("--output: the parent folder must be an existing local directory")
 	}
 	out := filepath.Join(parent, filepath.Base(outAbs))
 	if _, err := os.Lstat(out); !os.IsNotExist(err) {
-		return errors.New("output already exists; overwriting is forbidden")
+		return errors.New("--output already exists; choose a new folder (existing output is never overwritten)")
 	}
 	rel, err := filepath.Rel(target, out)
 	if wantDir && err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return errors.New("output directory must be outside the scanned target")
+		return errors.New("--output must be outside the scanned --target folder")
 	}
 	o.target, o.syft, o.output = target, engine, out
 	return handler.ResolvePaths(o)
@@ -208,14 +300,46 @@ func runCLI(ctx context.Context, args []string, stdout io.Writer, runner engineR
 		return err
 	}
 	env := Env{Engine: engines{scan: runner, convert: runConvert}, Now: now, Stdout: stdout}
-	if len(args) == 0 {
-		if command, ok := defaultRegistry.defaultSubcommand(); ok {
-			return command.Run(ctx, nil, env)
+	run := func(command Subcommand, rest []string) error {
+		err := command.Run(ctx, rest, env)
+		if errors.Is(err, errHelpRequested) {
+			text := command.Summary + "\n"
+			if command.Name == "generate" {
+				text = generateHelp()
+			}
+			_, err = io.WriteString(stdout, text)
 		}
-	} else if command, ok := defaultRegistry.subcommand(args[0]); ok {
-		return command.Run(ctx, args[1:], env)
+		return err
 	}
-	return errors.New("use " + joinChoices(defaultRegistry.subcommandNames()) + "; " + strings.TrimPrefix(usage, "invalid flags; use "))
+	defaultCommand, hasDefault := defaultRegistry.defaultSubcommand()
+	switch {
+	case len(args) == 0 && hasDefault:
+		return run(defaultCommand, nil)
+	case len(args) == 0:
+	case args[0] == "-h" || args[0] == "-help" || args[0] == "--help" || args[0] == "help":
+		if len(args) == 2 {
+			if command, ok := defaultRegistry.subcommand(args[1]); ok {
+				return run(command, []string{"--help"})
+			}
+		}
+		_, err := io.WriteString(stdout, topHelp())
+		return err
+	case args[0] == "--version" || args[0] == "-version":
+		args = append([]string{"version"}, args[1:]...)
+	}
+	if len(args) > 0 {
+		if command, ok := defaultRegistry.subcommand(args[0]); ok {
+			return run(command, args[1:])
+		}
+		// cracken-sbom --dry-run or cracken-sbom ./some/path run the default command.
+		if _, err := os.Lstat(args[0]); hasDefault && (strings.HasPrefix(args[0], "-") || err == nil) {
+			return run(defaultCommand, args)
+		}
+		if registryNamePattern.MatchString(args[0]) {
+			return fmt.Errorf("unknown command %q; use %s, or run cracken-sbom --help", args[0], joinChoices(defaultRegistry.subcommandNames()))
+		}
+	}
+	return errors.New("use " + joinChoices(defaultRegistry.subcommandNames()) + "; run cracken-sbom --help")
 }
 
 func contextError(ctx context.Context) error {

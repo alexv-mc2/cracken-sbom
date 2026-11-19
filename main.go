@@ -382,13 +382,25 @@ var sidecarNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}\.json$`)
 func validSidecars(name string, sidecars []OutputFile) error {
 	seen := map[string]bool{name: true, "provenance.json": true, "quality.json": true, "sbom.cdx.json": true, "sbom.cdx.zip": true}
 	for _, s := range sidecars {
-		if !sidecarNamePattern.MatchString(s.Name) || seen[s.Name] || !json.Valid(s.Data) {
+		if seen[s.Name] {
+			return errors.New("invalid extra output file")
+		}
+		// The one binary extra output: the native SPDX upload ZIP for crAcken.
+		if s.Name == crackenUploadFile {
+			if _, err := zip.NewReader(bytes.NewReader(s.Data), int64(len(s.Data))); err != nil {
+				return errors.New("invalid extra output file")
+			}
+		} else if !sidecarNamePattern.MatchString(s.Name) || !json.Valid(s.Data) {
 			return errors.New("invalid extra output file")
 		}
 		seen[s.Name] = true
 	}
 	return nil
 }
+
+// crackenUploadFile is the native Yocto SPDX, unchanged, packed for upload to
+// crAcken. It is not minimized; the privacy profile does not apply to it.
+const crackenUploadFile = "cracken-upload.zip"
 
 // Build all files privately, then reserve a new destination exclusively and
 // atomically replace only that reservation. No existing directory is replaced.

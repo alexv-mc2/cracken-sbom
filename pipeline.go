@@ -107,6 +107,10 @@ func RunGenerate(ctx context.Context, o generateOptions, env Env) error {
 	stdout := env.Stdout
 	_, _ = fmt.Fprintf(stdout, "Generated %s, provenance.json and quality.json. Review the SBOM before manual upload; provenance remains customer-held.\n", outputName)
 	for _, s := range prepared.Sidecars {
+		if s.Name == crackenUploadFile {
+			_, _ = fmt.Fprintf(stdout, "Also generated %s: upload this file to crAcken (SPDX upload method: ZIP archive). It is the build's own SPDX, unchanged and not minimized.\n", s.Name)
+			continue
+		}
 		_, _ = fmt.Fprintf(stdout, "Also generated %s (a separate file; it is never part of the SBOM).\n", s.Name)
 	}
 	if outputName == "sbom.cdx.zip" {

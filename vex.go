@@ -8,6 +8,7 @@
 package main
 
 import (
+	"fmt"
 	"regexp"
 	"sort"
 	"strings"
@@ -69,7 +70,17 @@ var spdx3TimePattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(
 // assessment on a recipe applies to the selected packages it generates; one
 // on a package applies to that package. Assessments withdrawn in the past are
 // skipped; an invalid withdrawal time keeps the assessment.
-func spdx3VEX(g *spdx3Graph, selected map[string]bool, generatedBy map[string][]string) []vexStatement {
+// Caps for attacker-shaped VEX data: statements (CVE x assessment), affected
+// (statement, component) pairs, and the bytes of the VEX file.
+var maxVEXStatements = 50000
+var maxVEXPairs = 200000
+var maxVEXBytes = 16 << 20
+
+func vexCapError(what string, limit int) error {
+	return fmt.Errorf("the Yocto SPDX holds more than %d VEX %s; refused to protect memory, the input looks malformed", limit, what)
+}
+
+func spdx3VEX(g *spdx3Graph, selected map[string]bool, generatedBy map[string][]string) ([]vexStatement, error) {
 	generates := map[string][]string{}
 	for pkg, recipes := range generatedBy {
 		for _, r := range recipes {
@@ -77,6 +88,7 @@ func spdx3VEX(g *spdx3Graph, selected map[string]bool, generatedBy map[string][]
 		}
 	}
 	out := []vexStatement{}
+	pairs := 0
 	for _, r := range g.relations {
 		var state vexState
 		switch {
@@ -124,14 +136,21 @@ func spdx3VEX(g *spdx3Graph, selected map[string]bool, generatedBy map[string][]
 		if len(targets) == 0 {
 			continue
 		}
+		cves = uniqueStrings(cves)
+		if len(out)+len(cves) > maxVEXStatements {
+			return nil, vexCapError("statements", maxVEXStatements)
+		}
+		if pairs += len(cves) * len(targets); pairs > maxVEXPairs {
+			return nil, vexCapError("affected-component pairs", maxVEXPairs)
+		}
 		justification := ""
 		if j, ok := r["security_justificationType"].(string); ok {
 			justification = spdx3Justifications[j]
 		}
-		for _, cve := range uniqueStrings(cves) {
+		for _, cve := range cves {
 			out = append(out, vexStatement{CVE: cve, State: state, Justification: justification, Targets: targets, Source: "yocto-spdx3-vex"})
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].CVE < out[j].CVE })
-	return out
+	return out, nil
 }

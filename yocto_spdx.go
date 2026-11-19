@@ -23,6 +23,7 @@ type yoctoConversion struct {
 	imageName, imageVersion string
 	spdxVersion             string
 	nativeSkipped           int
+	missing                 int // packages the image lists but the input lacks
 	warnings                []string
 	vex                     []vexStatement
 }
@@ -158,6 +159,10 @@ type spdx3Graph struct {
 	byID      map[string]map[string]any
 	nodes     []map[string]any
 	relations []map[string]any
+	// Indexes built once: from -> relationship type -> targets, and the
+	// reverse of hasOutput (output -> builds).
+	forward    map[string]map[string][]string
+	outputFrom map[string][]string
 }
 
 func spdx3ID(n map[string]any) string {
@@ -211,7 +216,7 @@ func parseSPDX3(data []byte) (*spdx3Graph, error) {
 	if !ok {
 		return nil, errors.New("the SPDX 3 document has no @graph")
 	}
-	g := &spdx3Graph{byID: map[string]map[string]any{}}
+	g := &spdx3Graph{byID: map[string]map[string]any{}, forward: map[string]map[string][]string{}, outputFrom: map[string][]string{}}
 	for _, v := range list {
 		n, ok := v.(map[string]any)
 		if !ok {
@@ -221,21 +226,26 @@ func parseSPDX3(data []byte) (*spdx3Graph, error) {
 		if id := spdx3ID(n); id != "" {
 			g.byID[id] = n
 		}
-		if _, ok := n["relationshipType"].(string); ok {
+		if kind, ok := n["relationshipType"].(string); ok {
 			g.relations = append(g.relations, n)
+			from, _ := n["from"].(string)
+			if g.forward[from] == nil {
+				g.forward[from] = map[string][]string{}
+			}
+			to := spdx3Refs(n["to"])
+			g.forward[from][kind] = append(g.forward[from][kind], to...)
+			if kind == "hasOutput" {
+				for _, t := range to {
+					g.outputFrom[t] = append(g.outputFrom[t], from)
+				}
+			}
 		}
 	}
 	return g, nil
 }
 
 func (g *spdx3Graph) targets(from, kind string) []string {
-	out := []string{}
-	for _, r := range g.relations {
-		if r["relationshipType"] == kind && r["from"] == from {
-			out = append(out, spdx3Refs(r["to"])...)
-		}
-	}
-	return out
+	return g.forward[from][kind]
 }
 
 func convertYoctoSPDX3(ctx context.Context, d yoctoDoc, work, syft string, engine EngineRunner) (*yoctoConversion, error) {
@@ -285,22 +295,17 @@ func convertYoctoSPDX3(ctx context.Context, d yoctoDoc, work, syft string, engin
 		}
 	}
 	for i := 0; i < len(queue); i++ {
+		if i%4096 == 0 && ctx.Err() != nil {
+			return nil, errors.New("generation cancelled")
+		}
 		id := queue[i]
 		for _, kind := range []string{"contains", "dependsOn", "hasInput"} {
 			for _, t := range g.targets(id, kind) {
 				enqueue(t)
 			}
 		}
-		for _, r := range g.relations {
-			if r["relationshipType"] == "hasOutput" {
-				for _, t := range spdx3Refs(r["to"]) {
-					if t == id {
-						if from, ok := r["from"].(string); ok {
-							enqueue(from)
-						}
-					}
-				}
-			}
+		for _, from := range g.outputFrom[id] {
+			enqueue(from)
 		}
 	}
 	generatedBy := map[string][]string{}
@@ -354,7 +359,10 @@ func convertYoctoSPDX3(ctx context.Context, d yoctoDoc, work, syft string, engin
 	if err != nil {
 		return nil, err
 	}
-	conv.vex = spdx3VEX(g, selected, generatedBy)
+	conv.vex, err = spdx3VEX(g, selected, generatedBy)
+	if err != nil {
+		return nil, err
+	}
 	return conv, nil
 }
 
@@ -377,6 +385,38 @@ type spdx2Doc struct {
 
 type spdx2Set struct {
 	byNamespace map[string]*spdx2Doc
+	// Indexes built once per document: SPDXID -> package, external
+	// document id -> namespace, and package -> GENERATED_FROM targets.
+	packages      map[*spdx2Doc]map[string]map[string]any
+	external      map[*spdx2Doc]map[string]string
+	generatedFrom map[*spdx2Doc]map[string][]string
+}
+
+func newSPDX2Set() *spdx2Set {
+	return &spdx2Set{byNamespace: map[string]*spdx2Doc{}, packages: map[*spdx2Doc]map[string]map[string]any{},
+		external: map[*spdx2Doc]map[string]string{}, generatedFrom: map[*spdx2Doc]map[string][]string{}}
+}
+
+func (s *spdx2Set) index(doc *spdx2Doc) {
+	pk := map[string]map[string]any{}
+	for _, p := range doc.Packages {
+		if id, ok := p["SPDXID"].(string); ok {
+			if _, dup := pk[id]; !dup {
+				pk[id] = p
+			}
+		}
+	}
+	ext := map[string]string{}
+	for _, e := range doc.ExternalRefs {
+		ext[e.ID] = e.Document
+	}
+	gen := map[string][]string{}
+	for _, r := range doc.Relationships {
+		if r.Type == "GENERATED_FROM" {
+			gen[r.From] = append(gen[r.From], r.To)
+		}
+	}
+	s.packages[doc], s.external[doc], s.generatedFrom[doc] = pk, ext, gen
 }
 
 func (s *spdx2Set) resolve(from *spdx2Doc, element string) (*spdx2Doc, map[string]any) {
@@ -386,28 +426,22 @@ func (s *spdx2Set) resolve(from *spdx2Doc, element string) (*spdx2Doc, map[strin
 		if i < 0 {
 			return nil, nil
 		}
-		ref, id := element[:i], element[i+1:]
-		doc = nil
-		for _, e := range from.ExternalRefs {
-			if e.ID == ref {
-				doc = s.byNamespace[e.Document]
-			}
-		}
-		local = id
+		doc = s.byNamespace[s.external[from][element[:i]]]
+		local = element[i+1:]
 	}
 	if doc == nil {
 		return nil, nil
 	}
-	for _, p := range doc.Packages {
-		if p["SPDXID"] == local {
-			return doc, p
-		}
-	}
-	return doc, nil
+	return doc, s.packages[doc][local]
 }
 
+// Derived-size caps for attacker-shaped SPDX 2 sets: recipe CPEs copied onto
+// packages, and the bytes of the merged document handed to the engine.
+var maxYoctoCPEPairs = 100000
+var maxYoctoMergedBytes = 48 << 20
+
 func convertYoctoSPDX2(ctx context.Context, docs []yoctoDoc, work, syft string, engine EngineRunner) (*yoctoConversion, error) {
-	set := &spdx2Set{byNamespace: map[string]*spdx2Doc{}}
+	set := newSPDX2Set()
 	parsed := []*spdx2Doc{}
 	names := map[*spdx2Doc]string{}
 	for _, d := range docs {
@@ -421,6 +455,7 @@ func convertYoctoSPDX2(ctx context.Context, docs []yoctoDoc, work, syft string, 
 		if doc.DocumentNamespace != "" {
 			set.byNamespace[doc.DocumentNamespace] = doc
 		}
+		set.index(doc)
 		parsed = append(parsed, doc)
 		names[doc] = d.name
 	}
@@ -465,7 +500,11 @@ func convertYoctoSPDX2(ctx context.Context, docs []yoctoDoc, work, syft string, 
 	merged = append(merged, map[string]any{"SPDXID": "SPDXRef-Image", "name": "yocto-image", "downloadLocation": "NOASSERTION", "filesAnalyzed": false})
 	seen := map[string]bool{}
 	missing := 0
-	for _, r := range image.Relationships {
+	cpePairs, mergedBytes := 0, 0
+	for i, r := range image.Relationships {
+		if i%1024 == 0 && ctx.Err() != nil {
+			return nil, errors.New("generation cancelled")
+		}
 		if r.Type != "CONTAINS" || !strings.HasPrefix(r.To, "DocumentRef-") || seen[r.To] {
 			continue
 		}
@@ -489,15 +528,18 @@ func convertYoctoSPDX2(ctx context.Context, docs []yoctoDoc, work, syft string, 
 		}
 		// The recipe carries the CPEs and the "CVEs fixed" list.
 		var cves []string
-		for _, rel := range pkgDoc.Relationships {
-			if rel.Type != "GENERATED_FROM" || rel.From != pkg["SPDXID"] {
-				continue
-			}
-			if _, recipe := set.resolve(pkgDoc, rel.To); recipe != nil {
+		pkgID, _ := pkg["SPDXID"].(string)
+		for _, to := range set.generatedFrom[pkgDoc][pkgID] {
+			if _, recipe := set.resolve(pkgDoc, to); recipe != nil {
 				if rn, _ := recipe["name"].(string); yoctoNative(rn) {
 					name = rn
 				}
-				out["externalRefs"] = mergeCPERefs(out["externalRefs"], recipe["externalRefs"])
+				refs, added, bytes := mergeCPERefs(out["externalRefs"], recipe["externalRefs"])
+				cpePairs, mergedBytes = cpePairs+added, mergedBytes+bytes
+				if cpePairs > maxYoctoCPEPairs || mergedBytes > maxYoctoMergedBytes {
+					return nil, fmt.Errorf("the Yocto SPDX would copy more than %d recipe CPEs (or %d MiB) onto packages; refused to protect memory, the input looks malformed", maxYoctoCPEPairs, maxYoctoMergedBytes>>20)
+				}
+				out["externalRefs"] = refs
 				if info, ok := recipe["sourceInfo"].(string); ok {
 					cves = append(cves, extractCvesFixed(info)...)
 				}
@@ -507,12 +549,22 @@ func convertYoctoSPDX2(ctx context.Context, docs []yoctoDoc, work, syft string, 
 			conv.nativeSkipped++
 			continue
 		}
+		for _, v := range []string{name, fmt.Sprint(out["versionInfo"]), fmt.Sprint(out["licenseDeclared"]), fmt.Sprint(out["licenseConcluded"])} {
+			mergedBytes += len(v) + 64
+		}
+		if mergedBytes > maxYoctoMergedBytes {
+			return nil, fmt.Errorf("the merged Yocto SPDX document would exceed %d MiB; refused to protect memory", maxYoctoMergedBytes>>20)
+		}
+		if len(conv.vex)+len(cves) > maxVEXStatements {
+			return nil, fmt.Errorf("the Yocto SPDX lists more than %d patched-CVE statements; refused to protect memory, the input looks malformed", maxVEXStatements)
+		}
 		merged = append(merged, out)
 		relationships = append(relationships, map[string]any{"spdxElementId": "SPDXRef-Image", "relatedSpdxElement": "SPDXRef-" + key, "relationshipType": "CONTAINS"})
 		for _, cve := range uniqueStrings(cves) {
 			conv.vex = append(conv.vex, vexStatement{CVE: cve, State: vexFixed, Targets: []string{key}, Source: "yocto-spdx2-cves-fixed"})
 		}
 	}
+	conv.missing = missing
 	if missing > 0 {
 		conv.warnings = append(conv.warnings, fmt.Sprintf("%d package(s) the Yocto image document lists were not found in the input; pass the image's complete .spdx.tar.zst.", missing))
 	}
@@ -524,8 +576,8 @@ func convertYoctoSPDX2(ctx context.Context, docs []yoctoDoc, work, syft string, 
 		"documentDescribes": []any{"SPDXRef-Image"}, "packages": merged, "relationships": relationships,
 	}
 	data, err := json.Marshal(doc)
-	if err != nil {
-		return nil, errors.New("cannot build the merged Yocto SPDX document")
+	if err != nil || len(data) > maxYoctoMergedBytes {
+		return nil, fmt.Errorf("cannot build the merged Yocto SPDX document within %d MiB", maxYoctoMergedBytes>>20)
 	}
 	input, err := writeWorkFile(work, "image.spdx.json", data)
 	if err != nil {
@@ -539,7 +591,10 @@ func convertYoctoSPDX2(ctx context.Context, docs []yoctoDoc, work, syft string, 
 	return conv, err
 }
 
-func mergeCPERefs(own, recipe any) any {
+// mergeCPERefs adds the recipe's CPE references a package does not carry and
+// reports how many it added and their size, for the caller's caps.
+func mergeCPERefs(own, recipe any) (any, int, int) {
+	added, size := 0, 0
 	list, _ := own.([]any)
 	have := map[string]bool{}
 	for _, v := range list {
@@ -560,12 +615,14 @@ func mergeCPERefs(own, recipe any) any {
 		if (path.Base(t) == "cpe23Type" || path.Base(t) == "cpe22Type") && loc != "" && !have[loc] {
 			list = append(list, map[string]any{"referenceCategory": "SECURITY", "referenceType": path.Base(t), "referenceLocator": loc})
 			have[loc] = true
+			added++
+			size += len(loc) + 96
 		}
 	}
 	if list == nil {
-		return nil
+		return nil, added, size
 	}
-	return list
+	return list, added, size
 }
 
 func uniqueStrings(values []string) []string {

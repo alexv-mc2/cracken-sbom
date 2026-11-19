@@ -47,7 +47,7 @@ passed through unchanged.
 | Unpacked firmware root filesystem | `etc/` plus a package database (dpkg/opkg, apk, rpm, pacman) | `generate --target-type rootfs` |
 | Container image | a `docker save` archive (`manifest.json`) or an OCI layout (`oci-layout`, `index.json`) in a `.tar` | `generate --target-type docker-archive` or `oci-archive` |
 | Firmware image (`.bin`, `.img`, ...) | SquashFS, UBI, uImage, FIT, ext4, EROFS, CramFS, JFFS2, cpio, TRX and other signatures; magic numbers from binwalk and unblob | `generate --target-type firmware-image` with unblob or binwalk found in `PATH` ([Firmware images](#firmware-images)) |
-| Yocto build folder, or its `tmp/deploy/images/<machine>/` | the image SPDX the build wrote: `*.spdx.tar.zst` (SPDX 2.2) or `*.rootfs.spdx.json` (SPDX 3) | `yocto`: CycloneDX 1.6 SBOM plus a separate VEX file ([Yocto guide](docs/YOCTO.md)); with several images or machines it prints one command each; without image SPDX it says how to enable it |
+| Yocto build folder, or its `tmp/deploy/images/<machine>/` | the image SPDX the build wrote: `*.spdx.tar.zst` (SPDX 2.2) or `*.rootfs.spdx.json` (SPDX 3) | `yocto`: `cracken-upload.zip` for crAcken, plus the CycloneDX 1.6 SBOM and a separate VEX file for BSI / customers ([Yocto guide](docs/YOCTO.md)); with several images or machines it prints one command each; without image SPDX it says how to enable it |
 | Only a `Dockerfile` | the recipe, not the image | builds nothing: shows how to `docker save` the image and run detect on the archive |
 
 Exit code 0 means an SBOM was built, or detect explained the next step without
@@ -203,6 +203,10 @@ Other local targets use the same command with these arguments:
 For [Yocto Project](https://www.yoctoproject.org/) builds, start from the
 native SPDX output of the build. The [Yocto guide](docs/YOCTO.md) explains how
 to enable it, where each release puts the files and how to prepare them.
+With `--target-type yocto` the tool writes three files from it:
+`cracken-upload.zip` (the build's own SPDX, unchanged, to upload to crAcken),
+and `sbom.cdx.json` plus `sbom.vex.cdx.json` (CycloneDX 1.6 SBOM and VEX for
+BSI TR-03183-2 and your customers).
 
 ## Firmware images
 

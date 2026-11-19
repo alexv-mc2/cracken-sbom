@@ -2,15 +2,20 @@ package main
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // fakeConvertEngine stands in for `syft convert`: it emits one CycloneDX
@@ -366,5 +371,250 @@ func TestYoctoDeployLinkAndDatedArchiveCountOnce(t *testing.T) {
 	_ = os.Symlink("img.rootfs-20261118093000.spdx.json", filepath.Join(v3, "img.rootfs.spdx.json"))
 	if set, err := collectYoctoSPDX(context.Background(), v3, "", ""); err != nil || len(set.docs) != 1 {
 		t.Fatalf("dated SPDX 3 root: %v", err)
+	}
+}
+
+func fixtureSet(t *testing.T, dir string) *yoctoSet {
+	t.Helper()
+	set, err := collectYoctoSPDX(context.Background(), dir, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return set
+}
+
+func TestCrackenUploadIsTheNativeSPDXUnchanged(t *testing.T) {
+	src := filepath.Join("fixtures", "yocto", "spdx2")
+	data, facts, err := buildCrackenUpload(fixtureSet(t, src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, _, _ := buildCrackenUpload(fixtureSet(t, src))
+	if !bytes.Equal(data, again) {
+		t.Fatal("upload ZIP is not deterministic")
+	}
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"busybox.spdx.json", "core-image-minimal-qemux86-64.spdx.json", "libz1.spdx.json", "recipe-busybox.spdx.json", "recipe-zlib.spdx.json"}
+	if len(zr.File) != len(want) || facts.Documents != len(want) {
+		t.Fatalf("entries: %d", len(zr.File))
+	}
+	for i, f := range zr.File {
+		if f.Name != want[i] {
+			t.Fatalf("entry %d: %s", i, f.Name)
+		}
+		rc, _ := f.Open()
+		got, _ := io.ReadAll(rc)
+		rc.Close()
+		orig, _ := os.ReadFile(filepath.Join(src, f.Name))
+		if !bytes.Equal(got, orig) {
+			t.Fatalf("%s changed", f.Name)
+		}
+	}
+	// SPDX 3: the one rootfs document.
+	data, facts, err = buildCrackenUpload(fixtureSet(t, filepath.Join("fixtures", "yocto", "spdx3")))
+	if err != nil || facts.Documents != 1 {
+		t.Fatalf("SPDX 3 upload: %v", err)
+	}
+	if validSidecars("sbom.cdx.json", []OutputFile{{Name: crackenUploadFile, Data: data}}) != nil {
+		t.Fatal("upload ZIP must be an allowed extra output")
+	}
+	if validSidecars("sbom.cdx.json", []OutputFile{{Name: crackenUploadFile, Data: []byte("not a zip")}}) == nil {
+		t.Fatal("a non-ZIP cracken-upload.zip was accepted")
+	}
+	if validSidecars("sbom.cdx.json", []OutputFile{{Name: "other.zip", Data: data}}) == nil {
+		t.Fatal("other binary names must stay refused")
+	}
+}
+
+func TestCrackenUploadRefusals(t *testing.T) {
+	src := filepath.Join("fixtures", "yocto", "spdx2")
+	set := func(t *testing.T) *yoctoSet { return fixtureSet(t, src) }
+	restore := func(p *int, v int) func() { old := *p; *p = v; return func() { *p = old } }
+	for name, tc := range map[string]struct {
+		limit *int
+		value int
+		want  string
+	}{
+		"entries":      {&uploadEntryLimit, 3, "limit of 3 files"},
+		"unpacked":     {&uploadUncompressedLimit, 1024, "unpacked"},
+		"compressed":   {&uploadCompressedLimit, 512, "ZIP"},
+		"spdx3 single": {&uploadSPDX3Limit, 10, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer restore(tc.limit, tc.value)()
+			s := set(t)
+			if name == "spdx3 single" {
+				s = fixtureSet(t, filepath.Join("fixtures", "yocto", "spdx3"))
+			}
+			if _, _, err := buildCrackenUpload(s); err == nil || !strings.Contains(err.Error(), "no upload file was written") || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("%s: %v", name, err)
+			}
+		})
+	}
+	// A missing recipe document: no upload file.
+	partial := t.TempDir()
+	copyTree(t, src, partial)
+	_ = os.Remove(filepath.Join(partial, "recipe-zlib.spdx.json"))
+	if _, _, err := buildCrackenUpload(fixtureSet(t, partial)); err == nil || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("missing recipe: %v", err)
+	}
+	// Two documents with one file name (from different folders).
+	dup := t.TempDir()
+	copyTree(t, src, dup)
+	copyTree(t, src, filepath.Join(dup, "again"))
+	if _, _, err := buildCrackenUpload(fixtureSet(t, dup)); err == nil || !strings.Contains(err.Error(), "share the file name") {
+		t.Fatalf("duplicate names: %v", err)
+	}
+	// generate: a warning by default, an error with --strict-upload.
+	output, _ := yoctoRun(t, partial)
+	if _, err := os.Stat(filepath.Join(output, crackenUploadFile)); err == nil {
+		t.Fatal("upload file written for a partial set")
+	}
+	q, _ := os.ReadFile(filepath.Join(output, "quality.json"))
+	if !bytes.Contains(q, []byte("cracken-upload.zip was not written")) {
+		t.Fatal("missing upload not reported")
+	}
+	dir := t.TempDir()
+	syft := filepath.Join(dir, "syft")
+	_ = os.WriteFile(syft, []byte("x"), 0700)
+	o, err := parseOptions([]string{"--target-type", "yocto", "--target", partial, "--target-id", "y", "--output", filepath.Join(dir, "o"), "--syft", syft, "--strict-upload"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RunGenerate(context.Background(), o, Env{Engine: &fakeConvertEngine{}, Now: fixedNow, Stdout: &bytes.Buffer{}}); err == nil || !strings.Contains(err.Error(), "cracken-upload.zip") {
+		t.Fatalf("strict upload: %v", err)
+	}
+}
+
+// Attacker-shaped SPDX: small inputs whose derived size explodes.
+
+func TestRecipeWideVEXExpansionIsCapped(t *testing.T) {
+	defer func(a, b int) { maxVEXStatements, maxVEXPairs = a, b }(maxVEXStatements, maxVEXPairs)
+	maxVEXPairs = 2000
+	var g strings.Builder
+	g.WriteString(`{"@context":"https://spdx.org/rdf/3.0.1/spdx-context.jsonld","@graph":[`)
+	g.WriteString(`{"type":"CreationInfo","@id":"_:c","specVersion":"3.0.1"},{"type":"SpdxDocument","spdxId":"d","rootElement":["r"]},{"type":"software_Package","spdxId":"r","name":"img","software_primaryPurpose":"filesystemImage"},{"type":"software_Package","spdxId":"recipe","name":"x","software_primaryPurpose":"source"}`)
+	pkgs := []string{}
+	for i := 0; i < 100; i++ {
+		id := fmt.Sprintf("p%d", i)
+		pkgs = append(pkgs, `"`+id+`"`)
+		fmt.Fprintf(&g, `,{"type":"software_Package","spdxId":"%s","name":"pkg%d","software_packageVersion":"1","software_primaryPurpose":"install"}`, id, i)
+	}
+	fmt.Fprintf(&g, `,{"type":"Relationship","spdxId":"c","from":"r","to":[%s],"relationshipType":"contains"}`, strings.Join(pkgs, ","))
+	fmt.Fprintf(&g, `,{"type":"Relationship","spdxId":"g","from":"recipe","to":[%s],"relationshipType":"generates"}`, strings.Join(pkgs, ","))
+	for i := 0; i < 50; i++ {
+		fmt.Fprintf(&g, `,{"type":"security_Vulnerability","spdxId":"v%d","externalIdentifier":[{"externalIdentifierType":"cve","identifier":"CVE-2026-%04d"}]}`, i, 1000+i)
+		fmt.Fprintf(&g, `,{"type":"security_VexFixedVulnAssessmentRelationship","spdxId":"a%d","from":"v%d","to":["recipe"],"relationshipType":"fixedIn"}`, i, i)
+	}
+	g.WriteString(`]}`)
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "img.rootfs.spdx.json"), []byte(g.String()), 0600)
+	set := fixtureSet(t, dir)
+	_, err := convertYoctoSPDX3(context.Background(), set.docs[0], t.TempDir(), "syft", &fakeConvertEngine{})
+	if err == nil || !strings.Contains(err.Error(), "affected-component pairs") {
+		t.Fatalf("50 CVEs x 100 packages must hit the pair cap: %v", err)
+	}
+	maxVEXPairs = 1 << 20
+	maxVEXStatements = 10
+	if _, err := convertYoctoSPDX3(context.Background(), set.docs[0], t.TempDir(), "syft", &fakeConvertEngine{}); err == nil || !strings.Contains(err.Error(), "statements") {
+		t.Fatalf("statement cap: %v", err)
+	}
+}
+
+func spdx2Attack(t *testing.T, packages, cpes int) string {
+	t.Helper()
+	dir := t.TempDir()
+	refs := []any{}
+	for i := 0; i < cpes; i++ {
+		refs = append(refs, map[string]any{"referenceCategory": "SECURITY", "referenceType": "cpe23Type", "referenceLocator": fmt.Sprintf("cpe:2.3:a:v%d:p:1:*:*:*:*:*:*:*", i)})
+	}
+	write := func(name string, doc map[string]any) {
+		data, _ := json.Marshal(doc)
+		_ = os.WriteFile(filepath.Join(dir, name), data, 0600)
+	}
+	write("recipe-r.spdx.json", map[string]any{"spdxVersion": "SPDX-2.2", "documentNamespace": "ns-recipe", "packages": []any{map[string]any{"SPDXID": "SPDXRef-Recipe-r", "name": "r", "externalRefs": refs}}})
+	pkgs := []any{}
+	rels := []any{}
+	imgRels := []any{}
+	for i := 0; i < packages; i++ {
+		id := fmt.Sprintf("SPDXRef-PACKAGE-p%d", i)
+		pkgs = append(pkgs, map[string]any{"SPDXID": id, "name": fmt.Sprintf("p%d", i), "versionInfo": "1"})
+		rels = append(rels, map[string]any{"spdxElementId": id, "relatedSpdxElement": "DocumentRef-recipe-r:SPDXRef-Recipe-r", "relationshipType": "GENERATED_FROM"})
+		imgRels = append(imgRels, map[string]any{"spdxElementId": "SPDXRef-Image", "relatedSpdxElement": "DocumentRef-pkgs:" + id, "relationshipType": "CONTAINS"})
+	}
+	write("pkgs.spdx.json", map[string]any{"spdxVersion": "SPDX-2.2", "documentNamespace": "ns-pkgs", "packages": pkgs, "relationships": rels,
+		"externalDocumentRefs": []any{map[string]any{"externalDocumentId": "DocumentRef-recipe-r", "spdxDocument": "ns-recipe"}}})
+	write("image.spdx.json", map[string]any{"spdxVersion": "SPDX-2.2", "documentNamespace": "ns-image", "packages": []any{map[string]any{"SPDXID": "SPDXRef-Image", "name": "img"}}, "relationships": imgRels,
+		"externalDocumentRefs": []any{map[string]any{"externalDocumentId": "DocumentRef-pkgs", "spdxDocument": "ns-pkgs"}}})
+	return dir
+}
+
+func TestRecipeCPEPropagationIsCapped(t *testing.T) {
+	defer func(a int) { maxYoctoCPEPairs = a }(maxYoctoCPEPairs)
+	maxYoctoCPEPairs = 5000
+	set := fixtureSet(t, spdx2Attack(t, 200, 50))
+	_, err := convertYoctoSPDX2(context.Background(), set.docs, t.TempDir(), "syft", &fakeConvertEngine{})
+	if err == nil || !strings.Contains(err.Error(), "recipe CPEs") {
+		t.Fatalf("200 packages x 50 CPEs must hit the cap: %v", err)
+	}
+}
+
+func TestSPDX2ResolutionIsIndexedAndCancellable(t *testing.T) {
+	set := fixtureSet(t, spdx2Attack(t, 20000, 1))
+	start := time.Now()
+	if _, err := convertYoctoSPDX2(context.Background(), set.docs, t.TempDir(), "syft", &fakeConvertEngine{}); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("20,000 packages took %v; resolution must be indexed", d)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := convertYoctoSPDX2(ctx, set.docs, t.TempDir(), "syft", &fakeConvertEngine{}); err == nil || !strings.Contains(err.Error(), "cancelled") {
+		t.Fatalf("cancellation: %v", err)
+	}
+}
+
+func TestRejectedArchiveStopsDecompression(t *testing.T) {
+	// The fake zstd prints an unsafe tar entry, then an endless stream.
+	dir := t.TempDir()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	_ = tw.WriteHeader(&tar.Header{Name: "../escape.spdx.json", Typeflag: tar.TypeReg, Size: 2, Mode: 0644})
+	_, _ = tw.Write([]byte("{}"))
+	_ = tw.Close()
+	head := filepath.Join(dir, "head.tar")
+	_ = os.WriteFile(head, buf.Bytes(), 0600)
+	_ = os.WriteFile(filepath.Join(dir, "x.spdx.tar.zst"), []byte("x"), 0600)
+	zstd := filepath.Join(t.TempDir(), "zstd")
+	_ = os.WriteFile(zstd, []byte("#!/bin/sh\n/bin/cat '"+head+"'\nexec /bin/cat /dev/zero\n"), 0700)
+	start := time.Now()
+	if _, err := collectYoctoSPDX(context.Background(), dir, zstd, ""); err == nil {
+		t.Fatal("unsafe entry accepted")
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("decompression kept running for %v after the rejection", d)
+	}
+}
+
+func TestDocumentLinkToFIFOIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "pipe")
+	if err := syscall.Mkfifo(fifo, 0600); err != nil {
+		t.Skip("mkfifo unavailable")
+	}
+	_ = os.Symlink("pipe", filepath.Join(dir, "img.rootfs.spdx.json"))
+	done := make(chan error, 1)
+	go func() { _, err := collectYoctoSPDX(context.Background(), dir, "", ""); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Fatalf("FIFO: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("reading a FIFO blocked")
 	}
 }

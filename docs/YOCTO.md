@@ -2,7 +2,9 @@
 
 A [Yocto Project](https://www.yoctoproject.org/) build can create an SBOM itself.
 Use the files from the exact image you ship, and keep the original build output
-for your records. ## Which file goes where
+for your records.
+
+## Which file goes where
 
 `cracken-sbom generate --target-type yocto` (or `cracken-sbom detect` on the
 build folder) writes, next to `provenance.json` and `quality.json`:
@@ -10,8 +12,8 @@ build folder) writes, next to `provenance.json` and `quality.json`:
 | File | Give it to | What it is |
 |---|---|---|
 | `cracken-upload.zip` | **crAcken**: SPDX upload method **ZIP archive** | the build's own SPDX documents, byte for byte, under their original file names. crAcken reads the build's "CVEs fixed" and VEX data from them and hides the CVEs the build already fixed |
-| `sbom.cdx.json` | **BSI TR-03183-2 / your customer** | the CycloneDX 1.6 SBOM, minimized |
-| `sbom.vex.cdx.json` | **BSI TR-03183-2 / your customer**, together with the SBOM | the CycloneDX VEX 1.6 file with the CVEs the build handled. crAcken does not apply this VEX file yet; upload `cracken-upload.zip` there |
+| `sbom.cdx.json`, or `sbom.cdx.zip` | **BSI TR-03183-2 / your customer** | the CycloneDX 1.6 SBOM, minimized. With `--zip`, or when the JSON is larger than 10 MiB, it is written as `sbom.cdx.zip`, a ZIP that holds only `sbom.cdx.json` |
+| `sbom.vex.cdx.json` | **BSI TR-03183-2 / your customer**, together with the SBOM | the CycloneDX VEX 1.6 file with the CVEs the build handled; always a separate file, also next to `sbom.cdx.zip`. crAcken does not apply this VEX file yet; upload `cracken-upload.zip` there |
 
 `cracken-upload.zip` is checked against crAcken's upload limits: 16 MiB
 compressed, 16 MiB unpacked (the tool counts every document, crAcken counts the

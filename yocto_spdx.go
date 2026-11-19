@@ -495,9 +495,14 @@ func convertYoctoSPDX2(ctx context.Context, docs []yoctoDoc, work, syft string, 
 			conv.imageVersion = v
 		}
 	}
-	merged := []any{}
-	relationships := []any{map[string]any{"spdxElementId": "SPDXRef-DOCUMENT", "relatedSpdxElement": "SPDXRef-Image", "relationshipType": "DESCRIBES"}}
-	merged = append(merged, map[string]any{"SPDXID": "SPDXRef-Image", "name": "yocto-image", "downloadLocation": "NOASSERTION", "filesAnalyzed": false})
+	sum := sha256.Sum256([]byte(names[image]))
+	// The merged document's exact encoded size is tracked from its parts, so
+	// the cap is checked before each package is kept.
+	merged := newMergedSPDX2("https://cracken.local/yocto/" + hex.EncodeToString(sum[:8]))
+	if err := merged.add(map[string]any{"SPDXID": "SPDXRef-Image", "name": "yocto-image", "downloadLocation": "NOASSERTION", "filesAnalyzed": false},
+		map[string]any{"spdxElementId": "SPDXRef-DOCUMENT", "relatedSpdxElement": "SPDXRef-Image", "relationshipType": "DESCRIBES"}); err != nil {
+		return nil, err
+	}
 	seen := map[string]bool{}
 	missing := 0
 	cpePairs, mergedBytes := 0, 0
@@ -519,7 +524,7 @@ func convertYoctoSPDX2(ctx context.Context, docs []yoctoDoc, work, syft string, 
 			conv.nativeSkipped++
 			continue
 		}
-		key := fmt.Sprintf("P%d", len(merged))
+		key := fmt.Sprintf("P%d", len(merged.packages))
 		out := map[string]any{"SPDXID": "SPDXRef-" + key, "downloadLocation": "NOASSERTION", "filesAnalyzed": false}
 		for _, field := range []string{"name", "versionInfo", "supplier", "originator", "licenseDeclared", "licenseConcluded", "externalRefs"} {
 			if v, ok := pkg[field]; ok {
@@ -549,17 +554,14 @@ func convertYoctoSPDX2(ctx context.Context, docs []yoctoDoc, work, syft string, 
 			conv.nativeSkipped++
 			continue
 		}
-		for _, v := range []string{name, fmt.Sprint(out["versionInfo"]), fmt.Sprint(out["licenseDeclared"]), fmt.Sprint(out["licenseConcluded"])} {
-			mergedBytes += len(v) + 64
-		}
-		if mergedBytes > maxYoctoMergedBytes {
-			return nil, fmt.Errorf("the merged Yocto SPDX document would exceed %d MiB; refused to protect memory", maxYoctoMergedBytes>>20)
-		}
 		if len(conv.vex)+len(cves) > maxVEXStatements {
 			return nil, fmt.Errorf("the Yocto SPDX lists more than %d patched-CVE statements; refused to protect memory, the input looks malformed", maxVEXStatements)
 		}
-		merged = append(merged, out)
-		relationships = append(relationships, map[string]any{"spdxElementId": "SPDXRef-Image", "relatedSpdxElement": "SPDXRef-" + key, "relationshipType": "CONTAINS"})
+		// Every copied field (name, version, supplier, originator, licences and
+		// the external refs with the recipe CPEs) is counted as encoded.
+		if err := merged.add(out, map[string]any{"spdxElementId": "SPDXRef-Image", "relatedSpdxElement": "SPDXRef-" + key, "relationshipType": "CONTAINS"}); err != nil {
+			return nil, err
+		}
 		for _, cve := range uniqueStrings(cves) {
 			conv.vex = append(conv.vex, vexStatement{CVE: cve, State: vexFixed, Targets: []string{key}, Source: "yocto-spdx2-cves-fixed"})
 		}
@@ -568,16 +570,9 @@ func convertYoctoSPDX2(ctx context.Context, docs []yoctoDoc, work, syft string, 
 	if missing > 0 {
 		conv.warnings = append(conv.warnings, fmt.Sprintf("%d package(s) the Yocto image document lists were not found in the input; pass the image's complete .spdx.tar.zst.", missing))
 	}
-	sum := sha256.Sum256([]byte(names[image]))
-	doc := map[string]any{
-		"spdxVersion": "SPDX-2.2", "dataLicense": "CC0-1.0", "SPDXID": "SPDXRef-DOCUMENT",
-		"name": "yocto-image", "documentNamespace": "https://cracken.local/yocto/" + hex.EncodeToString(sum[:8]),
-		"creationInfo":      map[string]any{"created": "1970-01-01T00:00:00Z", "creators": []any{"Tool: cracken-sbom"}},
-		"documentDescribes": []any{"SPDXRef-Image"}, "packages": merged, "relationships": relationships,
-	}
-	data, err := json.Marshal(doc)
-	if err != nil || len(data) > maxYoctoMergedBytes {
-		return nil, fmt.Errorf("cannot build the merged Yocto SPDX document within %d MiB", maxYoctoMergedBytes>>20)
+	data, err := merged.encode()
+	if err != nil {
+		return nil, err
 	}
 	input, err := writeWorkFile(work, "image.spdx.json", data)
 	if err != nil {
@@ -593,6 +588,65 @@ func convertYoctoSPDX2(ctx context.Context, docs []yoctoDoc, work, syft string, 
 
 // mergeCPERefs adds the recipe's CPE references a package does not carry and
 // reports how many it added and their size, for the caller's caps.
+// mergedSPDX2 is the merged SPDX 2.2 document handed to `syft convert`.
+// Packages and relationships are kept encoded; size is the exact length of
+// json.Marshal of the whole document at any time.
+type mergedSPDX2 struct {
+	doc                     map[string]any
+	packages, relationships []json.RawMessage
+	size                    int
+}
+
+func newMergedSPDX2(namespace string) *mergedSPDX2 {
+	m := &mergedSPDX2{doc: map[string]any{
+		"spdxVersion": "SPDX-2.2", "dataLicense": "CC0-1.0", "SPDXID": "SPDXRef-DOCUMENT",
+		"name": "yocto-image", "documentNamespace": namespace,
+		"creationInfo":      map[string]any{"created": "1970-01-01T00:00:00Z", "creators": []any{"Tool: cracken-sbom"}},
+		"documentDescribes": []any{"SPDXRef-Image"},
+		"packages":          []json.RawMessage{}, "relationships": []json.RawMessage{},
+	}}
+	base, _ := json.Marshal(m.doc)
+	m.size = len(base)
+	return m
+}
+
+func mergedGrowth(list []json.RawMessage, elem []byte) int {
+	if len(list) == 0 {
+		return len(elem)
+	}
+	return len(elem) + 1 // the separating comma
+}
+
+// add keeps one package and its relationship, or refuses them when the
+// document would exceed maxYoctoMergedBytes.
+func (m *mergedSPDX2) add(pkg, rel map[string]any) error {
+	p, err := json.Marshal(pkg)
+	if err != nil {
+		return errors.New("cannot build the merged Yocto SPDX document")
+	}
+	r, err := json.Marshal(rel)
+	if err != nil {
+		return errors.New("cannot build the merged Yocto SPDX document")
+	}
+	next := m.size + mergedGrowth(m.packages, p) + mergedGrowth(m.relationships, r)
+	if next > maxYoctoMergedBytes {
+		return fmt.Errorf("the merged Yocto SPDX document would exceed %d bytes (%d MiB); refused to protect memory, the input looks malformed", maxYoctoMergedBytes, maxYoctoMergedBytes>>20)
+	}
+	m.size = next
+	m.packages = append(m.packages, p)
+	m.relationships = append(m.relationships, r)
+	return nil
+}
+
+func (m *mergedSPDX2) encode() ([]byte, error) {
+	m.doc["packages"], m.doc["relationships"] = m.packages, m.relationships
+	data, err := json.Marshal(m.doc)
+	if err != nil || len(data) != m.size {
+		return nil, errors.New("cannot build the merged Yocto SPDX document")
+	}
+	return data, nil
+}
+
 func mergeCPERefs(own, recipe any) (any, int, int) {
 	added, size := 0, 0
 	list, _ := own.([]any)

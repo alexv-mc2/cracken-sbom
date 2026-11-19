@@ -135,6 +135,7 @@ func (yoctoTarget) Prepare(ctx context.Context, o generateOptions, env Env) (*Pr
 			return nil, cleanup, errors.New("cracken-upload.zip: " + uerr.Error())
 		}
 		p.Warnings = append(p.Warnings, "cracken-upload.zip was not written: "+uerr.Error())
+		p.Notices = append(p.Notices, "cracken-upload.zip was NOT written: "+uerr.Error()+" (see quality.json; --strict-upload makes this an error).")
 	} else {
 		p.Sidecars = append(p.Sidecars, OutputFile{Name: crackenUploadFile, Data: upload})
 		p.Provenance["cracken_upload"] = map[string]any{"documents": facts.Documents, "bytes": facts.Bytes, "sha256": facts.SHA256}

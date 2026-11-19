@@ -345,7 +345,7 @@ func yoctoDeployPlan(dir string, images []yoctoImage, ev []string) detectPlan {
 		Why:    "the build's own " + format + " lists what is installed in the image " + img.Name + ", and the CVEs it already patched go into a separate VEX file",
 		Target: args[1], Extra: args[2:],
 	}
-	plan.Notes = append(plan.Notes, "Which file goes where: upload cracken-upload.zip from the output folder to crAcken (SPDX upload method: ZIP archive); give sbom.cdx.json and sbom.vex.cdx.json to BSI TR-03183-2 reviewers or your customer.")
+	plan.Notes = append(plan.Notes, "Which file goes where: upload cracken-upload.zip from the output folder to crAcken (SPDX upload method: ZIP archive); give the SBOM (sbom.cdx.json, or sbom.cdx.zip with --zip or above 10 MiB) and the separate sbom.vex.cdx.json to BSI TR-03183-2 reviewers or your customer.")
 	if img.Builds > 1 {
 		plan.Notes = append(plan.Notes, fmt.Sprintf("The folder holds %d builds of %s; the current one (%s) is used.", img.Builds, img.Name, img.File))
 	}

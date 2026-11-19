@@ -205,8 +205,9 @@ native SPDX output of the build. The [Yocto guide](docs/YOCTO.md) explains how
 to enable it, where each release puts the files and how to prepare them.
 With `--target-type yocto` the tool writes three files from it:
 `cracken-upload.zip` (the build's own SPDX, unchanged, to upload to crAcken),
-and `sbom.cdx.json` plus `sbom.vex.cdx.json` (CycloneDX 1.6 SBOM and VEX for
-BSI TR-03183-2 and your customers).
+and the CycloneDX 1.6 SBOM plus the separate `sbom.vex.cdx.json` for
+BSI TR-03183-2 and your customers. The SBOM is `sbom.cdx.json`, or
+`sbom.cdx.zip` (holding only `sbom.cdx.json`) with `--zip` or above 10 MiB.
 
 ## Firmware images
 

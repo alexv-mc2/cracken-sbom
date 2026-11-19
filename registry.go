@@ -109,6 +109,8 @@ type Prepared struct {
 	Provenance map[string]any
 	// Warnings are copied into quality.json.
 	Warnings []string
+	// Notices are printed on the console after the output is written.
+	Notices []string
 }
 
 // Env is what handlers and subcommands get from the CLI.

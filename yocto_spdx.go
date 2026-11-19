@@ -359,11 +359,91 @@ func convertYoctoSPDX3(ctx context.Context, d yoctoDoc, work, syft string, engin
 	if err != nil {
 		return nil, err
 	}
-	conv.vex, err = spdx3VEX(g, selected, generatedBy)
+	// One component per recipe that generates a selected package, in
+	// document order. The packages link to it and lose their CPEs.
+	recipes := newYoctoRecipes()
+	for i, n := range g.nodes {
+		if i%4096 == 0 && ctx.Err() != nil {
+			return nil, errors.New("generation cancelled")
+		}
+		id := spdx3ID(n)
+		if !selected[id] {
+			continue
+		}
+		for _, rid := range generatedBy[id] {
+			rn := g.byID[rid]
+			if rn == nil || !spdx3HasType(rn, "software_Package") {
+				continue
+			}
+			recipe, _, err := recipes.get(rid, func() *yoctoRecipe {
+				name, _ := rn["name"].(string)
+				version, _ := rn["software_packageVersion"].(string)
+				if version == "" {
+					version, _ = n["software_packageVersion"].(string)
+				}
+				purl, _ := rn["software_packageUrl"].(string)
+				return &yoctoRecipe{name: name, version: version, purl: purl,
+					supplier: g.agentName(rn["suppliedBy"]), license: recipeLicense(g.declaredLicense(rid))}
+			})
+			if err != nil {
+				return nil, err
+			}
+			if recipe == nil {
+				continue
+			}
+			if err := recipes.link(id, recipe, spdx3CPEs(rn), spdx3CPEs(n)); err != nil {
+				return nil, err
+			}
+		}
+	}
+	conv.warnings = append(conv.warnings, recipes.warnings()...)
+	if conv.raw, err = recipes.inject(conv.raw); err != nil {
+		return nil, err
+	}
+	conv.vex, err = spdx3VEX(g, selected, recipes)
 	if err != nil {
 		return nil, err
 	}
 	return conv, nil
+}
+
+// agentName is the name of an SPDX 3 Agent (suppliedBy), or "".
+func (g *spdx3Graph) agentName(v any) string {
+	for _, id := range spdx3Refs(v) {
+		if name, ok := g.byID[id]["name"].(string); ok {
+			if clean, err := cleanString(name, "supplier name", false); err == nil {
+				return clean
+			}
+		}
+	}
+	return ""
+}
+
+// declaredLicense is the expression of an element's hasDeclaredLicense.
+func (g *spdx3Graph) declaredLicense(id string) string {
+	for _, t := range g.targets(id, "hasDeclaredLicense") {
+		if expr, ok := g.byID[t]["simplelicensing_licenseExpression"].(string); ok {
+			return expr
+		}
+	}
+	return ""
+}
+
+func spdx3CPEs(n map[string]any) []string {
+	out := []string{}
+	ids, _ := n["externalIdentifier"].([]any)
+	for _, v := range ids {
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		if t, _ := m["externalIdentifierType"].(string); t == "cpe23" || t == "cpe22" {
+			if s, ok := m["identifier"].(string); ok {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
 }
 
 // ---- SPDX 2.2 (Yocto Scarthgap 5.0 and earlier: a document set) ----
@@ -435,9 +515,8 @@ func (s *spdx2Set) resolve(from *spdx2Doc, element string) (*spdx2Doc, map[strin
 	return doc, s.packages[doc][local]
 }
 
-// Derived-size caps for attacker-shaped SPDX 2 sets: recipe CPEs copied onto
-// packages, and the bytes of the merged document handed to the engine.
-var maxYoctoCPEPairs = 100000
+// Derived-size caps for attacker-shaped SPDX 2 sets: the bytes of the
+// merged document handed to the engine.
 var maxYoctoMergedBytes = 48 << 20
 
 func convertYoctoSPDX2(ctx context.Context, docs []yoctoDoc, work, syft string, engine EngineRunner) (*yoctoConversion, error) {
@@ -505,7 +584,12 @@ func convertYoctoSPDX2(ctx context.Context, docs []yoctoDoc, work, syft string, 
 	}
 	seen := map[string]bool{}
 	missing := 0
-	cpePairs, mergedBytes := 0, 0
+	recipes := newYoctoRecipes()
+	type recipeLink struct {
+		doc *spdx2Doc
+		id  string
+		pkg map[string]any
+	}
 	for i, r := range image.Relationships {
 		if i%1024 == 0 && ctx.Err() != nil {
 			return nil, errors.New("generation cancelled")
@@ -531,39 +615,62 @@ func convertYoctoSPDX2(ctx context.Context, docs []yoctoDoc, work, syft string, 
 				out[field] = v
 			}
 		}
-		// The recipe carries the CPEs and the "CVEs fixed" list.
-		var cves []string
+		// The recipe carries the CPEs and the "CVEs fixed" list. It becomes
+		// one component of its own; the package only links to it.
+		links := []recipeLink{}
 		pkgID, _ := pkg["SPDXID"].(string)
 		for _, to := range set.generatedFrom[pkgDoc][pkgID] {
-			if _, recipe := set.resolve(pkgDoc, to); recipe != nil {
+			if recipeDoc, recipe := set.resolve(pkgDoc, to); recipe != nil {
 				if rn, _ := recipe["name"].(string); yoctoNative(rn) {
 					name = rn
 				}
-				refs, added, bytes := mergeCPERefs(out["externalRefs"], recipe["externalRefs"])
-				cpePairs, mergedBytes = cpePairs+added, mergedBytes+bytes
-				if cpePairs > maxYoctoCPEPairs || mergedBytes > maxYoctoMergedBytes {
-					return nil, fmt.Errorf("the Yocto SPDX would copy more than %d recipe CPEs (or %d MiB) onto packages; refused to protect memory, the input looks malformed", maxYoctoCPEPairs, maxYoctoMergedBytes>>20)
-				}
-				out["externalRefs"] = refs
-				if info, ok := recipe["sourceInfo"].(string); ok {
-					cves = append(cves, extractCvesFixed(info)...)
-				}
+				id, _ := recipe["SPDXID"].(string)
+				links = append(links, recipeLink{recipeDoc, id, recipe})
 			}
 		}
 		if yoctoNative(name) {
 			conv.nativeSkipped++
 			continue
 		}
-		if len(conv.vex)+len(cves) > maxVEXStatements {
-			return nil, fmt.Errorf("the Yocto SPDX lists more than %d patched-CVE statements; refused to protect memory, the input looks malformed", maxVEXStatements)
-		}
 		// Every copied field (name, version, supplier, originator, licences and
-		// the external refs with the recipe CPEs) is counted as encoded.
+		// the package's own external refs) is counted as encoded.
 		if err := merged.add(out, map[string]any{"spdxElementId": "SPDXRef-Image", "relatedSpdxElement": "SPDXRef-" + key, "relationshipType": "CONTAINS"}); err != nil {
 			return nil, err
 		}
-		for _, cve := range uniqueStrings(cves) {
-			conv.vex = append(conv.vex, vexStatement{CVE: cve, State: vexFixed, Targets: []string{key}, Source: "yocto-spdx2-cves-fixed"})
+		pkgVersion, _ := pkg["versionInfo"].(string)
+		for _, l := range links {
+			recipe, created, err := recipes.get(fmt.Sprintf("%p#%s", l.doc, l.id), func() *yoctoRecipe {
+				name, _ := l.pkg["name"].(string)
+				version, _ := l.pkg["versionInfo"].(string)
+				if version == "" || version == "NOASSERTION" {
+					version = pkgVersion
+				}
+				supplier, _ := l.pkg["supplier"].(string)
+				license, _ := l.pkg["licenseDeclared"].(string)
+				return &yoctoRecipe{name: name, version: version, supplier: spdxAgentName(supplier), license: recipeLicense(license)}
+			})
+			if err != nil {
+				return nil, err
+			}
+			if recipe == nil {
+				continue
+			}
+			if err := recipes.link(key, recipe, spdx2CPEs(l.pkg["externalRefs"]), spdx2CPEs(pkg["externalRefs"])); err != nil {
+				return nil, err
+			}
+			if !created {
+				continue
+			}
+			var cves []string
+			if info, ok := l.pkg["sourceInfo"].(string); ok {
+				cves = uniqueStrings(extractCvesFixed(info))
+			}
+			if len(conv.vex)+len(cves) > maxVEXStatements {
+				return nil, fmt.Errorf("the Yocto SPDX lists more than %d patched-CVE statements; refused to protect memory, the input looks malformed", maxVEXStatements)
+			}
+			for _, cve := range cves {
+				conv.vex = append(conv.vex, vexStatement{CVE: cve, State: vexFixed, Targets: []string{recipe.ref}, Source: "yocto-spdx2-cves-fixed"})
+			}
 		}
 	}
 	conv.missing = missing
@@ -583,11 +690,14 @@ func convertYoctoSPDX2(ctx context.Context, docs []yoctoDoc, work, syft string, 
 		return nil, err
 	}
 	conv.raw, _, err = filterConverted(raw, func(key, _ string) bool { return key != "Image" })
+	if err != nil {
+		return nil, err
+	}
+	conv.warnings = append(conv.warnings, recipes.warnings()...)
+	conv.raw, err = recipes.inject(conv.raw)
 	return conv, err
 }
 
-// mergeCPERefs adds the recipe's CPE references a package does not carry and
-// reports how many it added and their size, for the caller's caps.
 // mergedSPDX2 is the merged SPDX 2.2 document handed to `syft convert`.
 // Packages and relationships are kept encoded; size is the exact length of
 // json.Marshal of the whole document at any time.
@@ -647,36 +757,20 @@ func (m *mergedSPDX2) encode() ([]byte, error) {
 	return data, nil
 }
 
-func mergeCPERefs(own, recipe any) (any, int, int) {
-	added, size := 0, 0
-	list, _ := own.([]any)
-	have := map[string]bool{}
+func spdx2CPEs(refs any) []string {
+	out := []string{}
+	list, _ := refs.([]any)
 	for _, v := range list {
-		if m, ok := v.(map[string]any); ok {
-			if s, ok := m["referenceLocator"].(string); ok {
-				have[s] = true
-			}
-		}
-	}
-	extra, _ := recipe.([]any)
-	for _, v := range extra {
 		m, ok := v.(map[string]any)
 		if !ok || m["referenceCategory"] != "SECURITY" {
 			continue
 		}
 		t, _ := m["referenceType"].(string)
-		loc, _ := m["referenceLocator"].(string)
-		if (path.Base(t) == "cpe23Type" || path.Base(t) == "cpe22Type") && loc != "" && !have[loc] {
-			list = append(list, map[string]any{"referenceCategory": "SECURITY", "referenceType": path.Base(t), "referenceLocator": loc})
-			have[loc] = true
-			added++
-			size += len(loc) + 96
+		if loc, _ := m["referenceLocator"].(string); (path.Base(t) == "cpe23Type" || path.Base(t) == "cpe22Type") && loc != "" {
+			out = append(out, loc)
 		}
 	}
-	if list == nil {
-		return nil, added, size
-	}
-	return list, added, size
+	return out
 }
 
 func uniqueStrings(values []string) []string {

@@ -57,7 +57,8 @@ func TestBuildVEXGroupsAndSkipsUnknownTargets(t *testing.T) {
 		{CVE: "CVE-2024-0001", State: vexFixed, Targets: []string{"p1", "p2", "gone"}, Source: "s"},
 		{CVE: "CVE-2024-0003", State: vexAffected, Targets: []string{"gone"}, Source: "s"},
 	}
-	data, n, err := buildVEX(statements, refs, "2026-11-18T00:00:00Z")
+	const serial = "urn:uuid:0b6c2f6e-7d1a-4c3b-9a8e-5f4d3c2b1a09"
+	data, n, err := buildVEX(statements, refs, "2026-11-18T00:00:00Z", serial)
 	if err != nil || n != 2 {
 		t.Fatalf("buildVEX: %d %v", n, err)
 	}
@@ -68,6 +69,16 @@ func TestBuildVEXGroupsAndSkipsUnknownTargets(t *testing.T) {
 	if first["id"] != "CVE-2024-0001" || first["analysis"].(map[string]any)["state"] != "resolved" || len(first["affects"].([]any)) != 2 {
 		t.Fatalf("first: %v", first)
 	}
+	// Each reference is a BOM-Link into the SBOM, without versions.
+	for i, want := range []string{"urn:cdx:0b6c2f6e-7d1a-4c3b-9a8e-5f4d3c2b1a09/1#component-1", "urn:cdx:0b6c2f6e-7d1a-4c3b-9a8e-5f4d3c2b1a09/1#component-2"} {
+		a := first["affects"].([]any)[i].(map[string]any)
+		if a["ref"] != want || a["versions"] != nil || len(a) != 1 {
+			t.Fatalf("affects[%d]: %v", i, a)
+		}
+	}
+	if _, _, err := buildVEX(statements, refs, "x", "not-a-serial"); err == nil {
+		t.Fatal("a VEX without the SBOM serial number must be refused")
+	}
 	second := vulns[1].(map[string]any)
 	if second["analysis"].(map[string]any)["justification"] != "code_not_present" || second["analysis"].(map[string]any)["state"] != "not_affected" {
 		t.Fatalf("second: %v", second)
@@ -75,7 +86,7 @@ func TestBuildVEXGroupsAndSkipsUnknownTargets(t *testing.T) {
 	if strings.Contains(string(data), "CVE-2024-0003") || doc["components"] != nil {
 		t.Fatal("statement without an SBOM component, or an inventory, in the VEX")
 	}
-	if _, n, _ := buildVEX(nil, refs, "x"); n != 0 {
+	if _, n, _ := buildVEX(nil, refs, "x", serial); n != 0 {
 		t.Fatal("empty VEX must not be written")
 	}
 }

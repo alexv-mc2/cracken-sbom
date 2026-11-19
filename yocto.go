@@ -111,9 +111,14 @@ func (yoctoTarget) Prepare(ctx context.Context, o generateOptions, env Env) (*Pr
 	if err != nil {
 		return nil, cleanup, err
 	}
+	// The VEX file points into the SBOM with BOM-Links, so the SBOM's serial
+	// number is fixed here.
+	if p.SerialNumber, err = newSerialNumber(); err != nil {
+		return nil, cleanup, err
+	}
 	statements := conv.vex
 	if len(statements) > 0 {
-		vex, n, err := buildVEX(statements, refs, env.Now().UTC().Format(time.RFC3339))
+		vex, n, err := buildVEX(statements, refs, env.Now().UTC().Format(time.RFC3339), p.SerialNumber)
 		if err != nil {
 			return nil, cleanup, err
 		}

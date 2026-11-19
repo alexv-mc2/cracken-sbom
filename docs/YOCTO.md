@@ -68,16 +68,43 @@ count as one file. The tool reads:
 
 If the directory holds several different images, choose one with
 `--yocto-image NAME` (a file name prefix, such as `core-image-minimal`). Build-host and SDK packages (`*-native`, `nativesdk-*`,
-`*-cross*`) and recipes (source packages) are never listed. The same checks
+`*-cross*`) and source packages are never listed; recipes are listed as
+described in "Recipes and binary packages" below. The same checks
 as the crAcken GitHub Action's `yocto-pack` apply: no links out of the
 directory, no unsafe archive paths or links, one SPDX version, SPDX 3.1 refused,
 128 MiB read limit, 10,000 documents.
 
 The pinned Syft converts the selected packages with `syft convert` to
-CycloneDX 1.6, and the normal minimization and TR-03183-2 layer follow
-(see [TR-03183-2](TR-03183-2.md)). The image is the product
+CycloneDX 1.6, the recipe components are added, and the normal minimization
+and TR-03183-2 layer follow (see [TR-03183-2](TR-03183-2.md)). The image is the product
 (`metadata.component`); its name and version come from the image document
 unless `--product-name` / `--product-version` are given.
+
+### Recipes and binary packages
+
+A Yocto recipe (for example `busybox`) builds several binary packages
+(`busybox`, `busybox-syslog`, `busybox-udhcpc`, ...). The CPEs the build
+records (`CVE_PRODUCT`) and its patched-CVE data belong to the recipe, the
+upstream software. The SBOM therefore has:
+
+- **one component per recipe** of the image: name and version of the recipe,
+  every CPE the recipe names (the first in `cpe`, the others as
+  `evidence.identity[]` entries with `"field": "cpe"`), the supplier (SPDX 2.2
+  recipe `supplier`, SPDX 3 `suppliedBy`), the recipe licence when the SPDX
+  states one (SPDX 3 recipes in Yocto 6.0 do not, so `quality.json` reports
+  missing licences for them) and, for SPDX 3, the recipe's package URL. A
+  recipe without CPEs of its own takes the CPEs its packages carried;
+- **one component per installed binary package**, without a CPE, with the
+  property `cracken:yocto:recipe` whose value is the `bom-ref` of its recipe
+  component.
+
+A scanner that matches CPEs therefore reports a CVE once per recipe, not
+once per binary package. The link is a property, not `pedigree.ancestors`:
+in CycloneDX 1.6 an ancestor is a full, nested component, not a reference,
+so the recipe would appear a second time (with a different `bom-ref`, since
+`bom-ref` values must be unique) and its CPEs could be matched twice. BSI
+TR-03183-2 v2.1.0 defines no field for this link, and CycloneDX properties
+are the place for such facts.
 
 ### The VEX file
 
@@ -96,19 +123,26 @@ These are the same rules crAcken uses when it reads the native SPDX.
 Licence references to another document of the set
 (`DocumentRef-recipe-xz:LicenseRef-PD`) are written as `LicenseRef-PD` in the
 CycloneDX licence expression, because the document prefix names nothing in a
-single CycloneDX file; `quality.json` notes when this happened. An
-assessment on a recipe applies to the packages the recipe generates;
-assessments withdrawn in the past are left out. Each `affects[].ref` is the
-`bom-ref` of the component in `sbom.cdx.json`, and `versions` repeats its
-version. The file has no inventory of its own and no free-text notes from the
-build. `provenance.json` lists it with its SHA-256 under `extra_outputs`. If
+single CycloneDX file; `quality.json` notes when this happened. A statement
+names the recipe component: a "CVEs fixed" list or an SPDX 3 assessment on a
+recipe applies to that recipe, and an SPDX 3 assessment on a binary package
+applies to the package's recipe (or to the package when it has none).
+Assessments withdrawn in the past are left out. Each `affects[].ref` is a
+[BOM-Link](https://cyclonedx.org/capabilities/bomlink/) to the component in
+`sbom.cdx.json`, `urn:cdx:<serialNumber of the SBOM>/1#<bom-ref>`, so it
+resolves across the two files; the VEX metadata names the SBOM's serial number
+in `cracken:vex:sbom:serial`. A statement holds for the recipe as listed, so
+it carries no `versions`. The file has no inventory of its own and no
+free-text notes from the build. `provenance.json` lists it with its SHA-256 under `extra_outputs`. If
 the SPDX holds no such data, no VEX file is written and `quality.json` says so.
 
 Tested on real build output: a Scarthgap 5.0 `core-image-minimal` archive
-(`fixtures/yocto/real-scarthgap`, 38 components, 28 `resolved`) and the Yocto
-Project's own Wrynose 6.0.3 `core-image-minimal-qemux86-64.rootfs.spdx.json`
-from downloads.yoctoproject.org (38 components, 32 CVEs: 22 `not_affected`,
-10 `resolved`). The second file is not checked in; to repeat that test, set
+(`fixtures/yocto/real-scarthgap`, 62 components: 38 packages and 24 recipes;
+28 `resolved`) and the Yocto Project's own Wrynose 6.0.3
+`core-image-minimal-qemux86-64.rootfs.spdx.json` from downloads.yoctoproject.org
+(65 components: 38 packages and 27 recipes; 32 CVEs: 22 `not_affected`, 10
+`resolved`). Each CVE is stated once, on its recipe (before, the same 28 and
+32 CVEs were repeated on every binary package: 76 and 105 entries). The second file is not checked in; to repeat that test, set
 `CRACKEN_SBOM_YOCTO_SPDX3_SAMPLE` to a local copy when running
 `tests/run-tests.sh`.
 

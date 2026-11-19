@@ -116,7 +116,14 @@ func createProvenance(sbom []byte, ctx ProvenanceContext, quality Quality) ([]by
 	if len(ctx.Sidecars) > 0 {
 		outputs := []any{}
 		for _, s := range ctx.Sidecars {
-			outputs = append(outputs, map[string]string{"name": s.Name, "sha256": sha256Hex(s.Data)})
+			entry := map[string]any{"name": s.Name, "sha256": sha256Hex(s.Data), "role": "separate-json", "privacy_profile_applies": true}
+			switch {
+			case s.Name == crackenUploadFile:
+				entry["role"], entry["privacy_profile_applies"] = "cracken-upload", false
+			case strings.HasSuffix(s.Name, ".vex.cdx.json"):
+				entry["role"] = "vex"
+			}
+			outputs = append(outputs, entry)
 		}
 		result["extra_outputs"] = outputs
 	}

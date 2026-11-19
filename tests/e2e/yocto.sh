@@ -109,9 +109,50 @@ for case in sys.argv[2:]:
     assert got == want['vex'], f'{case}: VEX {got!r}'
     prov = json.loads((out/case/'provenance.json').read_text())
     outputs = {o['name'] for o in prov.get('extra_outputs', [])}
-    assert outputs == {'sbom.vex.cdx.json'}, f'{case}: provenance extra outputs {outputs!r}'
+    assert outputs == {'sbom.vex.cdx.json', 'cracken-upload.zip'}, f'{case}: provenance extra outputs {outputs!r}'
     text = (out/case/'sbom.cdx.json').read_text() + (out/case/'sbom.vex.cdx.json').read_text()
     for marker in ('fixtures/yocto', '/Users/', '/home/', 'spdx.org/spdxdocs', 'Applet disabled'):
         assert marker not in text, f'{case}: leaked {marker!r}'
     print(f'PASS Yocto {case}: CycloneDX 1.6 SBOM and separate VEX ({len(got)} statements) with SBOM bom-refs')
 PY
+
+# cracken-upload.zip is the native SPDX, byte for byte, under the original
+# file names (checked on the real Scarthgap archive against its tar entries).
+if command -v zstd >/dev/null 2>&1; then
+  unpacked="$CRACKEN_SBOM_TEST_OUTPUT/yocto-real-unpacked"
+  mkdir -p "$unpacked"
+  zstd -q -d -c "$TOOL_DIR/fixtures/yocto/real-scarthgap/core-image-minimal-stm32mp25-eval.spdx.tar.zst" | tar -xf - -C "$unpacked"
+  "$PYTHON" - "$CRACKEN_SBOM_TEST_OUTPUT/yocto-real-scarthgap/cracken-upload.zip" "$unpacked" <<'PY'
+import hashlib, sys, zipfile
+from pathlib import Path
+upload, unpacked = Path(sys.argv[1]), Path(sys.argv[2])
+source = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in unpacked.glob('*.spdx.json')}
+with zipfile.ZipFile(upload) as z:
+    names = z.namelist()
+    got = {n: hashlib.sha256(z.read(n)).hexdigest() for n in names}
+assert len(names) == 203 and names == sorted(names), f'{len(names)} entries'
+assert got == source, 'cracken-upload.zip differs from the native SPDX documents'
+assert upload.stat().st_size <= 16 * 1024 * 1024
+print(f'PASS cracken-upload.zip: {len(names)} native SPDX documents, SHA-256 identical to the build archive')
+PY
+fi
+# Above crAcken's ZIP limit: no upload file, a clear reason, and an error
+# with --strict-upload. The SBOM and VEX are still written.
+big="$CRACKEN_SBOM_TEST_OUTPUT/yocto-upload-over-limit-input"
+mkdir -p "$big"
+cp "$TOOL_DIR"/fixtures/yocto/spdx2/*.spdx.json "$big/"
+"$PYTHON" - "$big/padding.spdx.json" <<'PY'
+import json, sys
+# A valid extra SPDX 2.2 document of 17 MiB (crAcken's unpacked limit is 16 MiB).
+json.dump({'spdxVersion': 'SPDX-2.2', 'SPDXID': 'SPDXRef-DOCUMENT', 'name': 'padding', 'documentNamespace': 'https://example.invalid/padding', 'comment': 'x' * (17 * 1024 * 1024)}, open(sys.argv[1], 'w'))
+PY
+run "$big" yocto-upload-over-limit
+[[ ! -e "$CRACKEN_SBOM_TEST_OUTPUT/yocto-upload-over-limit/cracken-upload.zip" ]]
+grep -q 'cracken-upload.zip was not written: the SPDX documents are 17 MiB unpacked, above crAcken' "$CRACKEN_SBOM_TEST_OUTPUT/yocto-upload-over-limit/quality.json"
+if "$CRACKEN_SBOM_BIN" generate --target-type yocto --target "$big" --target-id over-limit-strict --syft "$SYFT" \
+  --output "$CRACKEN_SBOM_TEST_OUTPUT/yocto-upload-over-limit-strict" --strict-upload >/dev/null 2>"$CRACKEN_SBOM_TEST_OUTPUT/strict.err"; then
+  echo 'FAIL --strict-upload must fail above the limit' >&2; exit 1
+fi
+grep -q 'cracken-upload.zip: the SPDX documents are 17 MiB unpacked' "$CRACKEN_SBOM_TEST_OUTPUT/strict.err"
+[[ ! -e "$CRACKEN_SBOM_TEST_OUTPUT/yocto-upload-over-limit-strict" ]]
+echo 'PASS cracken-upload.zip over crAcken limit: no file, clear reason; --strict-upload fails'

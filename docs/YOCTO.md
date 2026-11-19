@@ -2,11 +2,34 @@
 
 A [Yocto Project](https://www.yoctoproject.org/) build can create an SBOM itself.
 Use the files from the exact image you ship, and keep the original build output
-for your records. There are two ways to use them:
+for your records. ## Which file goes where
 
-- **Upload the native SPDX to crAcken** (sections below). crAcken reads the
-  build's patched-CVE and VEX data from it directly, so already fixed CVEs are
-  not reported. This needs no generator.
+`cracken-sbom generate --target-type yocto` (or `cracken-sbom detect` on the
+build folder) writes, next to `provenance.json` and `quality.json`:
+
+| File | Give it to | What it is |
+|---|---|---|
+| `cracken-upload.zip` | **crAcken**: SPDX upload method **ZIP archive** | the build's own SPDX documents, byte for byte, under their original file names. crAcken reads the build's "CVEs fixed" and VEX data from them and hides the CVEs the build already fixed |
+| `sbom.cdx.json` | **BSI TR-03183-2 / your customer** | the CycloneDX 1.6 SBOM, minimized |
+| `sbom.vex.cdx.json` | **BSI TR-03183-2 / your customer**, together with the SBOM | the CycloneDX VEX 1.6 file with the CVEs the build handled. crAcken does not apply this VEX file yet; upload `cracken-upload.zip` there |
+
+`cracken-upload.zip` is checked against crAcken's upload limits: 16 MiB
+compressed, 16 MiB unpacked (the tool counts every document, crAcken counts the
+image's documents), 10,000 files, and 16 MiB for one SPDX 3 document. For SPDX
+2.2 the image document and every package and recipe document it refers to
+must be present. If a check fails, no upload file is written, `quality.json`
+says why and the SBOM and VEX are still written; with `--strict-upload` the
+run fails instead. The upload file is **not minimized**: native Yocto SPDX
+can include source references, file names and internal package identities,
+so review it like the build output it is. The manual ZIP recipe further down
+stays as a fallback.
+
+There are two ways to use them:
+
+- **Upload the native SPDX to crAcken**: `cracken-upload.zip` from the
+  generator, or a ZIP made by hand (sections below). crAcken reads the build's
+  patched-CVE and VEX data from it directly, so already fixed CVEs are not
+  reported.
 - **Generate a CycloneDX 1.6 SBOM plus a separate VEX file** with
   `cracken-sbom generate --target-type yocto` for customers or authorities that
   ask for BSI TR-03183-2 v2.1.0 (CycloneDX 1.6), as described next.

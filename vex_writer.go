@@ -31,7 +31,14 @@ func buildVEX(statements []vexStatement, refs map[string]vexTarget, timestamp st
 	}
 	grouped := map[key]map[string]vexTarget{}
 	sources := map[string]bool{}
+	if len(statements) > maxVEXStatements {
+		return nil, 0, vexCapError("statements", maxVEXStatements)
+	}
+	pairs := 0
 	for _, s := range statements {
+		if pairs += len(s.Targets); pairs > maxVEXPairs {
+			return nil, 0, vexCapError("affected-component pairs", maxVEXPairs)
+		}
 		k := key{s.CVE, s.State, s.Justification}
 		for _, t := range s.Targets {
 			target, ok := refs[t]
@@ -44,6 +51,14 @@ func buildVEX(statements []vexStatement, refs map[string]vexTarget, timestamp st
 			grouped[k][target.Ref] = target
 			sources[s.Source] = true
 		}
+	}
+	entries := 0
+	for _, targets := range grouped {
+		entries += len(targets)
+	}
+	// About 160 bytes per indented affects entry: refuse before encoding.
+	if entries*160 > maxVEXBytes {
+		return nil, 0, fmt.Errorf("the VEX file would exceed %d MiB; refused to protect memory, the input looks malformed", maxVEXBytes>>20)
 	}
 	keys := make([]key, 0, len(grouped))
 	for k := range grouped {
@@ -120,6 +135,9 @@ func buildVEX(statements []vexStatement, refs map[string]vexTarget, timestamp st
 	out, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return nil, 0, errors.New("cannot encode the VEX file")
+	}
+	if len(out) > maxVEXBytes {
+		return nil, 0, fmt.Errorf("the VEX file would exceed %d MiB; refused to protect memory, the input looks malformed", maxVEXBytes>>20)
 	}
 	return append(out, '\n'), len(vulnerabilities), nil
 }

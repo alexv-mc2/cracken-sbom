@@ -48,6 +48,7 @@ func (yoctoTarget) Flags() []ExtraFlag {
 	return []ExtraFlag{
 		{Name: "zstd", Usage: "absolute path to zstd, to unpack a .spdx.tar.zst (yocto only; default: zstd on PATH)"},
 		{Name: "yocto-image", Usage: "image name prefix when the directory holds several images (yocto only)"},
+		{Name: "strict-upload", Bool: true, Usage: "fail when cracken-upload.zip cannot be written (yocto only)"},
 	}
 }
 func (yoctoTarget) ConfigDigest() string { return configurationDigest(yoctoTargetType) }
@@ -123,6 +124,20 @@ func (yoctoTarget) Prepare(ctx context.Context, o generateOptions, env Env) (*Pr
 	}
 	if len(p.Sidecars) == 0 {
 		p.Warnings = append(p.Warnings, "The Yocto SPDX holds no patched-CVE or VEX data for the selected packages; no VEX file was written.")
+	}
+	// The file for crAcken: the native SPDX, unchanged.
+	upload, facts, uerr := buildCrackenUpload(set)
+	if uerr == nil && conv.missing > 0 {
+		uerr = fmt.Errorf("%d package(s) the image lists are missing from the input; no upload file was written", conv.missing)
+	}
+	if uerr != nil {
+		if o.extra["strict-upload"] == "true" {
+			return nil, cleanup, errors.New("cracken-upload.zip: " + uerr.Error())
+		}
+		p.Warnings = append(p.Warnings, "cracken-upload.zip was not written: "+uerr.Error())
+	} else {
+		p.Sidecars = append(p.Sidecars, OutputFile{Name: crackenUploadFile, Data: upload})
+		p.Provenance["cracken_upload"] = map[string]any{"documents": facts.Documents, "bytes": facts.Bytes, "sha256": facts.SHA256}
 	}
 	return p, cleanup, nil
 }
@@ -295,8 +310,13 @@ func walkYoctoDir(ctx context.Context, root string, c *yoctoCollector) error {
 		if err != nil || !within(root, real) {
 			return errors.New("unsafe symlink in the Yocto input: " + name)
 		}
-		if info, err := os.Stat(real); err != nil || info.IsDir() {
+		info, err := os.Stat(real)
+		if err != nil || info.IsDir() {
 			return nil
+		}
+		if !info.Mode().IsRegular() {
+			// A FIFO or device would block the read below.
+			return errors.New("a Yocto SPDX document is not a regular file: " + name)
 		}
 		// Prefer the real file's name over a link to it (IMAGE_LINK_NAME).
 		if _, ok := byReal[real]; !ok || !isLink {
@@ -396,11 +416,15 @@ func readZstdTar(ctx context.Context, archive, zstd string, c *yoctoCollector) e
 			}
 		}
 	}()
-	_, _ = io.Copy(io.Discard, out)
-	waitErr := cmd.Wait()
 	if readErr != nil {
+		// Stop decompressing at once: a rejected archive may still have a
+		// large, highly compressed tail.
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
 		return readErr
 	}
+	_, _ = io.Copy(io.Discard, out)
+	waitErr := cmd.Wait()
 	if waitErr != nil {
 		return errors.New("zstd could not decompress the .spdx.tar.zst")
 	}

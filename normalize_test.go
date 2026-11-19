@@ -530,3 +530,36 @@ func TestNormalizeCountsOnlyEmittedVersionStringComponents(t *testing.T) {
 		t.Fatalf("wrong emitted version-string count: %+v, %v", quality, err)
 	}
 }
+
+func TestNormalizeRewritesCrossDocumentLicenseRefs(t *testing.T) {
+	for in, want := range map[string]string{
+		"GPL-2.0-only AND DocumentRef-recipe-busybox:LicenseRef-bzip2-1.0.4": "GPL-2.0-only AND LicenseRef-bzip2-1.0.4",
+		"DocumentRef-recipe-xz:LicenseRef-PD":                                "LicenseRef-PD",
+	} {
+		c := testPackage("pkg")
+		c["licenses"] = []any{map[string]any{"expression": in}}
+		out, q, err := normalizeSBOM(encodeTest(t, testDocument(c)), testContext())
+		if err != nil {
+			t.Fatalf("%q: %v", in, err)
+		}
+		if !strings.Contains(string(out), `"expression": "`+want+`"`) || strings.Contains(string(out), "DocumentRef") {
+			t.Fatalf("%q not rewritten to %q", in, want)
+		}
+		if !strings.Contains(strings.Join(q.Warnings, " "), "Cross-document") {
+			t.Fatal("rewrite not reported")
+		}
+	}
+	id := testPackage("pkg")
+	id["licenses"] = []any{map[string]any{"license": map[string]any{"id": "DocumentRef-recipe-xz:LicenseRef-PD"}}}
+	if out, _, err := normalizeSBOM(encodeTest(t, testDocument(id)), testContext()); err != nil || !strings.Contains(string(out), `"expression": "LicenseRef-PD"`) {
+		t.Fatalf("cross-document licence id: %v", err)
+	}
+	// Every other colon stays refused.
+	for _, bad := range []string{"DocumentRef-x:GPL-2.0-only", "MIT AND http://x", "DocumentRef-a/b:LicenseRef-c", "LicenseRef-a:LicenseRef-b", "DocumentRef-x:LicenseRef-y:z"} {
+		c := testPackage("pkg")
+		c["licenses"] = []any{map[string]any{"expression": bad}}
+		if _, _, err := normalizeSBOM(encodeTest(t, testDocument(c)), testContext()); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}

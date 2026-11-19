@@ -1,0 +1,19 @@
+{
+ "documents": [
+  {
+   "filename": "busybox.spdx.json"
+  },
+  {
+   "filename": "libz1.spdx.json"
+  },
+  {
+   "filename": "recipe-busybox.spdx.json"
+  },
+  {
+   "filename": "recipe-zlib.spdx.json"
+  },
+  {
+   "filename": "core-image-minimal-qemux86-64.spdx.json"
+  }
+ ]
+}

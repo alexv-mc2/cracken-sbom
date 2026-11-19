@@ -341,3 +341,74 @@ func TestGitHeadReadsPackedRefs(t *testing.T) {
 		t.Fatal("unsafe ref accepted")
 	}
 }
+
+func TestDetectYoctoDeployAndBuildFolders(t *testing.T) {
+	dated := "core-image-minimal-qemux86-64.rootfs-20261118093000.spdx.tar.zst"
+	link := "core-image-minimal-qemux86-64.rootfs.spdx.tar.zst"
+	machine := func(t *testing.T, root, name string, files ...string) string {
+		dir := filepath.Join(root, "tmp", "deploy", "images", name)
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range files {
+			if err := os.WriteFile(filepath.Join(dir, f), []byte("x"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return dir
+	}
+	// The deploy folder itself: dated archive plus IMAGE_LINK_NAME link.
+	build := writeTree(t, map[string]string{"conf/local.conf": ""})
+	images := machine(t, build, "qemux86-64", dated, "bzImage", "core-image-minimal-qemux86-64.rootfs.manifest")
+	if err := os.Symlink(dated, filepath.Join(images, link)); err != nil {
+		t.Fatal(err)
+	}
+	for name, dir := range map[string]string{"deploy folder": images, "build folder": build} {
+		plan := folderPlan(t, dir)
+		if plan.TargetType != "yocto" || plan.Target != images || len(plan.Extra) != 0 || !strings.Contains(plan.Why, "core-image-minimal-qemux86-64.rootfs") {
+			t.Fatalf("%s: %+v", name, plan)
+		}
+	}
+	// A second dated build of the same image: the linked one is chosen.
+	if err := os.WriteFile(filepath.Join(images, "core-image-minimal-qemux86-64.rootfs-20261101000000.spdx.tar.zst"), []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	plan := folderPlan(t, images)
+	if plan.TargetType != "yocto" || strings.Join(plan.Extra, " ") != "--yocto-image core-image-minimal-qemux86-64.rootfs-20261118093000" {
+		t.Fatalf("two builds: %+v", plan)
+	}
+	// Two different images: one command each, nothing guessed.
+	two := writeTree(t, map[string]string{})
+	_ = os.WriteFile(filepath.Join(two, "core-image-minimal-qemux86-64.rootfs-20261118093000.spdx.json"), []byte("{}"), 0600)
+	_ = os.WriteFile(filepath.Join(two, "core-image-base-qemux86-64.rootfs-20261118093000.spdx.json"), []byte("{}"), 0600)
+	if plan := folderPlan(t, two); plan.TargetType != "" || len(plan.Choices) != 2 || plan.Choices[0][2] != "--yocto-image" {
+		t.Fatalf("two images: %+v", plan)
+	}
+	// Two machines in a build folder.
+	machines := writeTree(t, map[string]string{"conf/local.conf": ""})
+	machine(t, machines, "qemux86-64", dated)
+	machine(t, machines, "qemuarm64", "core-image-minimal-qemuarm64.rootfs-20261118093000.spdx.tar.zst")
+	if plan := folderPlan(t, machines); plan.TargetType != "" || len(plan.Choices) != 2 {
+		t.Fatalf("two machines: %+v", plan)
+	}
+	// A build without image SPDX: guidance without placeholders.
+	empty := folderPlan(t, writeTree(t, map[string]string{"conf/local.conf": "", "tmp/deploy/spdx/": ""}))
+	text := strings.Join(empty.Guidance, "\n")
+	if empty.TargetType != "" || strings.Contains(text, "RELEASE") || strings.Contains(text, "NEW-DIR") || !strings.Contains(text, "create-spdx") {
+		t.Fatalf("no SPDX yet: %+v", empty)
+	}
+}
+
+func TestDetectYoctoChoicesPrintCompleteCommands(t *testing.T) {
+	two := writeTree(t, map[string]string{})
+	_ = os.WriteFile(filepath.Join(two, "core-image-minimal-qemux86-64.rootfs-20261118093000.spdx.json"), []byte("{}"), 0600)
+	_ = os.WriteFile(filepath.Join(two, "core-image-base-qemux86-64.rootfs-20261118093000.spdx.json"), []byte("{}"), 0600)
+	var out bytes.Buffer
+	if err := runCLI(context.Background(), []string{"detect", two, "--syft", "/opt/syft"}, &out, nil, fixedNow); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	if strings.Count(text, "cracken-sbom generate --target-type yocto") != 2 || strings.Contains(text, "RELEASE") || strings.Contains(text, "NEW-DIR") || !strings.Contains(text, "--target-id local-") {
+		t.Fatalf("choices:\n%s", text)
+	}
+}

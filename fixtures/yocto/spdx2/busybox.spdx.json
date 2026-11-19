@@ -1,0 +1,49 @@
+{
+ "SPDXID": "SPDXRef-DOCUMENT",
+ "creationInfo": {
+  "created": "2026-11-01T10:00:00Z",
+  "creators": [
+   "Tool: OpenEmbedded Core create-spdx.bbclass",
+   "Organization: OpenEmbedded ()"
+  ],
+  "licenseListVersion": "3.14"
+ },
+ "dataLicense": "CC0-1.0",
+ "documentNamespace": "http://spdx.org/spdxdoc/busybox-0002",
+ "name": "busybox",
+ "spdxVersion": "SPDX-2.2",
+ "packages": [
+  {
+   "SPDXID": "SPDXRef-PACKAGE-busybox",
+   "name": "busybox",
+   "versionInfo": "1.36.1-r0",
+   "downloadLocation": "NOASSERTION",
+   "licenseDeclared": "GPL-2.0-only",
+   "licenseConcluded": "GPL-2.0-only",
+   "copyrightText": "NOASSERTION",
+   "supplier": "Organization: OpenEmbedded ()"
+  }
+ ],
+ "relationships": [
+  {
+   "spdxElementId": "SPDXRef-DOCUMENT",
+   "relatedSpdxElement": "SPDXRef-PACKAGE-busybox",
+   "relationshipType": "DESCRIBES"
+  },
+  {
+   "spdxElementId": "SPDXRef-PACKAGE-busybox",
+   "relatedSpdxElement": "DocumentRef-recipe-busybox:SPDXRef-Recipe-busybox",
+   "relationshipType": "GENERATED_FROM"
+  }
+ ],
+ "externalDocumentRefs": [
+  {
+   "externalDocumentId": "DocumentRef-recipe-busybox",
+   "spdxDocument": "http://spdx.org/spdxdoc/recipe-busybox-0001",
+   "checksum": {
+    "algorithm": "SHA1",
+    "checksumValue": "0000000000000000000000000000000000000000"
+   }
+  }
+ ]
+}

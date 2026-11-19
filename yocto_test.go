@@ -121,6 +121,7 @@ func vexFacts(t *testing.T, output string) map[string]string {
 		c := v.(map[string]any)
 		names[c["bom-ref"].(string)] = c["name"].(string)
 	}
+	link := "urn:cdx:" + strings.TrimPrefix(sbom["serialNumber"].(string), "urn:uuid:") + "/1#"
 	vex := readJSON(t, filepath.Join(output, yoctoVEXFile))
 	if vex["specVersion"] != "1.6" || vex["components"] != nil {
 		t.Fatal("VEX must be CycloneDX 1.6 without an inventory")
@@ -129,15 +130,73 @@ func vexFacts(t *testing.T, output string) map[string]string {
 	for _, v := range vex["vulnerabilities"].([]any) {
 		vuln := v.(map[string]any)
 		for _, a := range vuln["affects"].([]any) {
-			ref := a.(map[string]any)["ref"].(string)
-			name, ok := names[ref]
-			if !ok {
-				t.Fatalf("VEX reference %s is not an SBOM bom-ref", ref)
+			entry := a.(map[string]any)
+			ref := entry["ref"].(string)
+			name, ok := names[strings.TrimPrefix(ref, link)]
+			if !strings.HasPrefix(ref, link) || !ok {
+				t.Fatalf("VEX reference %s is not a BOM-Link to an SBOM bom-ref", ref)
+			}
+			if entry["versions"] != nil {
+				t.Fatalf("VEX reference %s carries versions", ref)
 			}
 			facts[vuln["id"].(string)+" "+name] = vuln["analysis"].(map[string]any)["state"].(string)
 		}
 	}
 	return facts
+}
+
+type recipeFacts struct {
+	links map[string]string // package name -> recipe name
+	cpes  map[string]string // recipe name -> cpe
+	alias map[string][]string
+}
+
+// yoctoRecipeFacts checks the recipe model of a Yocto SBOM: packages carry no
+// CPE and link to a recipe component; only recipes carry CPEs.
+func yoctoRecipeFacts(t *testing.T, sbom map[string]any) recipeFacts {
+	t.Helper()
+	byRef := map[string]map[string]any{}
+	for _, v := range sbom["components"].([]any) {
+		c := v.(map[string]any)
+		byRef[c["bom-ref"].(string)] = c
+	}
+	f := recipeFacts{links: map[string]string{}, cpes: map[string]string{}, alias: map[string][]string{}}
+	isRecipe := map[string]bool{}
+	for _, c := range byRef {
+		props, _ := c["properties"].([]any)
+		for _, p := range props {
+			m := p.(map[string]any)
+			if m["name"] != yoctoRecipeProperty {
+				continue
+			}
+			recipe := byRef[m["value"].(string)]
+			if recipe == nil {
+				t.Fatalf("%s links to unknown %v", c["name"], m["value"])
+			}
+			isRecipe[m["value"].(string)] = true
+			f.links[c["name"].(string)] = recipe["name"].(string)
+			if c["cpe"] != nil || c["evidence"] != nil {
+				t.Fatalf("package %s still carries a CPE", c["name"])
+			}
+		}
+	}
+	for ref := range isRecipe {
+		c := byRef[ref]
+		name := c["name"].(string)
+		if cpe, ok := c["cpe"].(string); ok {
+			f.cpes[name] = cpe
+		}
+		if ev, ok := c["evidence"].(map[string]any); ok {
+			for _, v := range ev["identity"].([]any) {
+				m := v.(map[string]any)
+				if m["field"] != "cpe" {
+					t.Fatalf("identity evidence field %v", m["field"])
+				}
+				f.alias[name] = append(f.alias[name], m["concludedValue"].(string))
+			}
+		}
+	}
+	return f
 }
 
 func TestYoctoSPDX3SelectionAndVEX(t *testing.T) {
@@ -150,10 +209,22 @@ func TestYoctoSPDX3SelectionAndVEX(t *testing.T) {
 	for _, v := range sbom["components"].([]any) {
 		got[v.(map[string]any)["name"].(string)] = true
 	}
-	for _, want := range []string{"busybox", "libz1", "libssl3"} {
+	for _, want := range []string{"busybox", "libz1", "libssl3", "zlib", "openssl"} {
 		if !got[want] {
 			t.Errorf("%s missing", want)
 		}
+	}
+	recipes := yoctoRecipeFacts(t, sbom)
+	want := map[string]string{"busybox": "busybox", "libz1": "zlib", "libssl3": "openssl"}
+	for pkg, recipe := range want {
+		if recipes.links[pkg] != recipe {
+			t.Errorf("%s links to %q, want recipe %s", pkg, recipes.links[pkg], recipe)
+		}
+	}
+	// The packages carried the CPEs; their recipes (which name none) take
+	// them over. openssl has no CPE anywhere.
+	if recipes.cpes["busybox"] != "cpe:2.3:a:busybox:busybox:1.36.1:*:*:*:*:*:*:*" || recipes.cpes["zlib"] != "cpe:2.3:a:zlib:zlib:1.3.1:*:*:*:*:*:*:*" || recipes.cpes["openssl"] != "" {
+		t.Fatalf("recipe CPEs: %v", recipes.cpes)
 	}
 	for _, never := range []string{"quilt-native", "not-in-image", "core-image-minimal-qemux86-64.rootfs"} {
 		if got[never] {
@@ -164,14 +235,14 @@ func TestYoctoSPDX3SelectionAndVEX(t *testing.T) {
 	if root["name"] != "core-image-minimal-qemux86-64.rootfs" || root["version"] != "1.0" {
 		t.Fatalf("product: %v", root)
 	}
-	want := map[string]string{
+	wantVEX := map[string]string{
 		"CVE-2023-42364 busybox": "resolved", "CVE-2023-42363 busybox": "not_affected",
-		"CVE-2024-0727 libssl3": "exploitable", "CVE-2022-37434 libz1": "resolved",
+		"CVE-2024-0727 openssl": "exploitable", "CVE-2022-37434 zlib": "resolved",
 	}
-	if facts := vexFacts(t, output); len(facts) != len(want) {
+	if facts := vexFacts(t, output); len(facts) != len(wantVEX) {
 		t.Fatalf("VEX facts %v", facts)
 	} else {
-		for k, v := range want {
+		for k, v := range wantVEX {
 			if facts[k] != v {
 				t.Errorf("%s: %q, want %q", k, facts[k], v)
 			}
@@ -200,8 +271,16 @@ func TestYoctoSPDX2DocumentSetAndCvesFixed(t *testing.T) {
 		t.Fatalf("unexpected VEX facts %v", facts)
 	}
 	sbom := readJSON(t, filepath.Join(output, "sbom.cdx.json"))
-	if n := len(sbom["components"].([]any)); n != 2 {
-		t.Fatalf("components: %d", n)
+	if n := len(sbom["components"].([]any)); n != 4 {
+		t.Fatalf("components: %d (2 packages + 2 recipes)", n)
+	}
+	recipes := yoctoRecipeFacts(t, sbom)
+	if recipes.links["busybox"] != "busybox" || recipes.links["libz1"] != "zlib" {
+		t.Fatalf("recipe links: %v", recipes.links)
+	}
+	// The recipe document's CPEs, licence and supplier are on the recipe.
+	if recipes.cpes["busybox"] == "" || recipes.cpes["zlib"] == "" {
+		t.Fatalf("recipe CPEs: %v", recipes.cpes)
 	}
 	if sbom["metadata"].(map[string]any)["component"].(map[string]any)["name"] != "core-image-minimal-qemux86-64" {
 		t.Fatal("product name from the image document")
@@ -495,12 +574,14 @@ func TestCrackenUploadRefusals(t *testing.T) {
 
 // Attacker-shaped SPDX: small inputs whose derived size explodes.
 
-func TestRecipeWideVEXExpansionIsCapped(t *testing.T) {
-	defer func(a, b int) { maxVEXStatements, maxVEXPairs = a, b }(maxVEXStatements, maxVEXPairs)
-	maxVEXPairs = 2000
+// spdx3VEXAttack is an image of 100 packages with 50 CVE assessments. With
+// a recipe that generates every package, an assessment on the recipe names
+// one component; without it, an assessment naming all packages names 100.
+func spdx3VEXAttack(t *testing.T, withRecipe bool) yoctoDoc {
+	t.Helper()
 	var g strings.Builder
 	g.WriteString(`{"@context":"https://spdx.org/rdf/3.0.1/spdx-context.jsonld","@graph":[`)
-	g.WriteString(`{"type":"CreationInfo","@id":"_:c","specVersion":"3.0.1"},{"type":"SpdxDocument","spdxId":"d","rootElement":["r"]},{"type":"software_Package","spdxId":"r","name":"img","software_primaryPurpose":"filesystemImage"},{"type":"software_Package","spdxId":"recipe","name":"x","software_primaryPurpose":"source"}`)
+	g.WriteString(`{"type":"CreationInfo","@id":"_:c","specVersion":"3.0.1"},{"type":"SpdxDocument","spdxId":"d","rootElement":["r"]},{"type":"software_Package","spdxId":"r","name":"img","software_primaryPurpose":"filesystemImage"},{"type":"software_Package","spdxId":"recipe","name":"x","software_packageVersion":"1","software_primaryPurpose":"source"}`)
 	pkgs := []string{}
 	for i := 0; i < 100; i++ {
 		id := fmt.Sprintf("p%d", i)
@@ -508,22 +589,53 @@ func TestRecipeWideVEXExpansionIsCapped(t *testing.T) {
 		fmt.Fprintf(&g, `,{"type":"software_Package","spdxId":"%s","name":"pkg%d","software_packageVersion":"1","software_primaryPurpose":"install"}`, id, i)
 	}
 	fmt.Fprintf(&g, `,{"type":"Relationship","spdxId":"c","from":"r","to":[%s],"relationshipType":"contains"}`, strings.Join(pkgs, ","))
-	fmt.Fprintf(&g, `,{"type":"Relationship","spdxId":"g","from":"recipe","to":[%s],"relationshipType":"generates"}`, strings.Join(pkgs, ","))
+	target := `"recipe"`
+	if withRecipe {
+		fmt.Fprintf(&g, `,{"type":"Relationship","spdxId":"g","from":"recipe","to":[%s],"relationshipType":"generates"}`, strings.Join(pkgs, ","))
+	} else {
+		target = strings.Join(pkgs, ",")
+	}
 	for i := 0; i < 50; i++ {
 		fmt.Fprintf(&g, `,{"type":"security_Vulnerability","spdxId":"v%d","externalIdentifier":[{"externalIdentifierType":"cve","identifier":"CVE-2026-%04d"}]}`, i, 1000+i)
-		fmt.Fprintf(&g, `,{"type":"security_VexFixedVulnAssessmentRelationship","spdxId":"a%d","from":"v%d","to":["recipe"],"relationshipType":"fixedIn"}`, i, i)
+		fmt.Fprintf(&g, `,{"type":"security_VexFixedVulnAssessmentRelationship","spdxId":"a%d","from":"v%d","to":[%s],"relationshipType":"fixedIn"}`, i, i, target)
 	}
 	g.WriteString(`]}`)
 	dir := t.TempDir()
 	_ = os.WriteFile(filepath.Join(dir, "img.rootfs.spdx.json"), []byte(g.String()), 0600)
-	set := fixtureSet(t, dir)
-	_, err := convertYoctoSPDX3(context.Background(), set.docs[0], t.TempDir(), "syft", &fakeConvertEngine{})
+	return fixtureSet(t, dir).docs[0]
+}
+
+func TestRecipeVEXNamesTheRecipeOnce(t *testing.T) {
+	defer func(a int) { maxVEXPairs = a }(maxVEXPairs)
+	maxVEXPairs = 2000
+	// 50 CVEs on a recipe of 100 packages: 50 pairs, not 5,000.
+	conv, err := convertYoctoSPDX3(context.Background(), spdx3VEXAttack(t, true), t.TempDir(), "syft", &fakeConvertEngine{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pairs := 0
+	for _, s := range conv.vex {
+		pairs += len(s.Targets)
+		if len(s.Targets) != 1 || s.Targets[0] != "cracken-yocto-recipe-1" {
+			t.Fatalf("statement targets %v", s.Targets)
+		}
+	}
+	if len(conv.vex) != 50 || pairs != 50 {
+		t.Fatalf("%d statements, %d pairs", len(conv.vex), pairs)
+	}
+}
+
+func TestVEXPairsAndStatementsAreCapped(t *testing.T) {
+	defer func(a, b int) { maxVEXStatements, maxVEXPairs = a, b }(maxVEXStatements, maxVEXPairs)
+	maxVEXPairs = 2000
+	doc := spdx3VEXAttack(t, false)
+	_, err := convertYoctoSPDX3(context.Background(), doc, t.TempDir(), "syft", &fakeConvertEngine{})
 	if err == nil || !strings.Contains(err.Error(), "affected-component pairs") {
 		t.Fatalf("50 CVEs x 100 packages must hit the pair cap: %v", err)
 	}
 	maxVEXPairs = 1 << 20
 	maxVEXStatements = 10
-	if _, err := convertYoctoSPDX3(context.Background(), set.docs[0], t.TempDir(), "syft", &fakeConvertEngine{}); err == nil || !strings.Contains(err.Error(), "statements") {
+	if _, err := convertYoctoSPDX3(context.Background(), doc, t.TempDir(), "syft", &fakeConvertEngine{}); err == nil || !strings.Contains(err.Error(), "statements") {
 		t.Fatalf("statement cap: %v", err)
 	}
 }
@@ -556,13 +668,66 @@ func spdx2Attack(t *testing.T, packages, cpes int) string {
 	return dir
 }
 
-func TestRecipeCPEPropagationIsCapped(t *testing.T) {
-	defer func(a int) { maxYoctoCPEPairs = a }(maxYoctoCPEPairs)
-	maxYoctoCPEPairs = 5000
+func TestRecipeCPEsAreNotCopiedOntoPackages(t *testing.T) {
+	// 200 packages of one recipe with 50 CPEs: one recipe component with 50
+	// CPEs, and no CPE on any package.
 	set := fixtureSet(t, spdx2Attack(t, 200, 50))
+	conv, err := convertYoctoSPDX2(context.Background(), set.docs, t.TempDir(), "syft", &fakeConvertEngine{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, _, _, err := normalizeDocument(conv.raw, testContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := yoctoRecipeFacts(t, doc)
+	if len(f.links) != 200 || f.cpes["r"] != "cpe:2.3:a:v0:p:1:*:*:*:*:*:*:*" || len(f.alias["r"]) != 49 {
+		t.Fatalf("%d links, cpe %q, %d aliases", len(f.links), f.cpes["r"], len(f.alias["r"]))
+	}
+	if n := len(doc["components"].([]any)); n != 201 {
+		t.Fatalf("components: %d", n)
+	}
+}
+
+func TestRecipeCPEsAreCapped(t *testing.T) {
+	defer func(a int) { maxYoctoRecipeCPEs = a }(maxYoctoRecipeCPEs)
+	maxYoctoRecipeCPEs = 40
+	set := fixtureSet(t, spdx2Attack(t, 2, 50))
 	_, err := convertYoctoSPDX2(context.Background(), set.docs, t.TempDir(), "syft", &fakeConvertEngine{})
 	if err == nil || !strings.Contains(err.Error(), "recipe CPEs") {
-		t.Fatalf("200 packages x 50 CPEs must hit the cap: %v", err)
+		t.Fatalf("50 recipe CPEs must hit a cap of 40: %v", err)
+	}
+}
+
+func TestRecipeComponentFields(t *testing.T) {
+	if got := spdxAgentName("Organization: OpenEmbedded ()"); got != "OpenEmbedded" {
+		t.Fatalf("supplier %q", got)
+	}
+	if got := spdxAgentName("Person: Jane Doe (jane@example.com)"); got != "Jane Doe" {
+		t.Fatalf("supplier %q", got)
+	}
+	for _, bad := range []string{"NOASSERTION", "Tool: x", "Organization: /home/u", ""} {
+		if got := spdxAgentName(bad); got != "" {
+			t.Fatalf("%q gave supplier %q", bad, got)
+		}
+	}
+	if recipeLicense("GPL-2.0-only AND DocumentRef-recipe-busybox:LicenseRef-bzip2-1.0.4") == "" || recipeLicense("NOASSERTION") != "" || recipeLicense("MIT; rm -rf /") != "" {
+		t.Fatal("recipe licence filter")
+	}
+	// Invalid CPEs are left out with a warning, never failing the run.
+	s := newYoctoRecipes()
+	r, created, err := s.get("x", func() *yoctoRecipe { return &yoctoRecipe{name: "zlib", version: "1.3.1"} })
+	if err != nil || !created {
+		t.Fatal(err)
+	}
+	if err := s.link("P0", r, []string{"cpe:2.3:a:zlib:zlib:1.3.1:*:*:*:*:*:*:*", "cpe:2.3:a:zlib:zlib:1.3.1:*:*:*:*:*:*:*", "/etc/passwd"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.cpes) != 1 || len(s.warnings()) != 1 {
+		t.Fatalf("cpes %v warnings %v", r.cpes, s.warnings())
+	}
+	if r, _, _ := s.get("bad", func() *yoctoRecipe { return &yoctoRecipe{name: "../x"} }); r != nil {
+		t.Fatal("a recipe with an unsafe name must not become a component")
 	}
 }
 
@@ -623,11 +788,13 @@ func TestDocumentLinkToFIFOIsRefused(t *testing.T) {
 	}
 }
 
+const testSerial = "urn:uuid:0b6c2f6e-7d1a-4c3b-9a8e-5f4d3c2b1a09"
+
 func TestVEXSizeIsExactAtTheCap(t *testing.T) {
 	defer func(v int) { maxVEXBytes = v }(maxVEXBytes)
 	refs := map[string]vexTarget{}
 	targets := []string{}
-	for i := 0; i < 53; i++ {
+	for i := 0; i < 100; i++ {
 		k := fmt.Sprintf("p%d", i)
 		refs[k] = vexTarget{Ref: fmt.Sprintf("component-%d", i+1), Name: "n", Version: "1.0-r0"}
 		targets = append(targets, k)
@@ -636,16 +803,16 @@ func TestVEXSizeIsExactAtTheCap(t *testing.T) {
 	for i := 0; i < 2000; i++ {
 		statements = append(statements, vexStatement{CVE: fmt.Sprintf("CVE-2026-%05d", i), State: vexFixed, Targets: targets, Source: "s"})
 	}
-	// The real encoded size decides, in both directions: 2,000 CVEs x 53
-	// refs with versions is above 16 MiB, so it is refused ...
-	if _, _, err := buildVEX(statements, refs, "2026-11-19T00:00:00Z"); err == nil {
-		t.Fatal("2000 x 53 with versions is above 16 MiB and must be refused")
+	// The real encoded size decides, in both directions: 2,000 CVEs x 100
+	// BOM-Links is above 16 MiB, so it is refused ...
+	if _, _, err := buildVEX(statements, refs, "2026-11-19T00:00:00Z", testSerial); err == nil || !strings.Contains(err.Error(), "would exceed") {
+		t.Fatalf("2000 x 100 BOM-Links is above 16 MiB and must be refused: %v", err)
 	}
 	// ... while the same CVEs on 30 refs are below it and pass.
 	for i := range statements {
 		statements[i].Targets = targets[:30]
 	}
-	data, n, err := buildVEX(statements, refs, "2026-11-19T00:00:00Z")
+	data, n, err := buildVEX(statements, refs, "2026-11-19T00:00:00Z", testSerial)
 	if err != nil || n != 2000 || len(data) > 16<<20 {
 		t.Fatalf("2000 x 30: %d bytes, %v", len(data), err)
 	}
@@ -659,16 +826,16 @@ func TestVEXSizeIsExactAtTheCap(t *testing.T) {
 		t.Fatal("the part-wise encoding differs from json.MarshalIndent")
 	}
 	small := statements[:40]
-	exact, _, err := buildVEX(small, refs, "2026-11-19T00:00:00Z")
+	exact, _, err := buildVEX(small, refs, "2026-11-19T00:00:00Z", testSerial)
 	if err != nil {
 		t.Fatal(err)
 	}
 	maxVEXBytes = len(exact)
-	if _, _, err := buildVEX(small, refs, "2026-11-19T00:00:00Z"); err != nil {
+	if _, _, err := buildVEX(small, refs, "2026-11-19T00:00:00Z", testSerial); err != nil {
 		t.Fatalf("exactly at the cap must pass: %v", err)
 	}
 	maxVEXBytes = len(exact) - 1
-	if _, _, err := buildVEX(small, refs, "2026-11-19T00:00:00Z"); err == nil || !strings.Contains(err.Error(), "would exceed") {
+	if _, _, err := buildVEX(small, refs, "2026-11-19T00:00:00Z", testSerial); err == nil || !strings.Contains(err.Error(), "would exceed") {
 		t.Fatalf("one byte over the cap must fail: %v", err)
 	}
 }

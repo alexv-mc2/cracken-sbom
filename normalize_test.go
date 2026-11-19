@@ -563,3 +563,32 @@ func TestNormalizeRewritesCrossDocumentLicenseRefs(t *testing.T) {
 		}
 	}
 }
+
+func TestIdentityEvidenceKeepsOnlyCleanCPEs(t *testing.T) {
+	raw := `{"bomFormat":"CycloneDX","specVersion":"1.6","components":[
+	 {"bom-ref":"r","type":"library","name":"zlib","version":"1.3.1","cpe":"cpe:2.3:a:zlib:zlib:1.3.1:*:*:*:*:*:*:*",
+	  "evidence":{"identity":[{"field":"cpe","concludedValue":"cpe:2.3:a:gnu:zlib:1.3.1:*:*:*:*:*:*:*"},
+	   {"field":"cpe","concludedValue":"cpe:2.3:a:zlib:zlib:1.3.1:*:*:*:*:*:*:*"},
+	   {"field":"cpe","concludedValue":"/home/user/secret"},
+	   {"field":"purl","concludedValue":"pkg:generic/zlib@1.3.1"}],
+	  "occurrences":[{"location":"/home/user/build/libz.so"}]}},
+	 {"bom-ref":"p","type":"library","name":"libz1","version":"1.3.1",
+	  "properties":[{"name":"cracken:yocto:recipe","value":"r"},{"name":"cracken:yocto:recipe","value":"gone"}]}]}`
+	doc, _, quality, err := normalizeDocument([]byte(raw), testContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	components := doc["components"].([]any)
+	recipe, pkg := components[0].(map[string]any), components[1].(map[string]any)
+	identity := recipe["evidence"].(map[string]any)["identity"].([]any)
+	if len(identity) != 1 || identity[0].(map[string]any)["concludedValue"] != "cpe:2.3:a:gnu:zlib:1.3.1:*:*:*:*:*:*:*" || len(recipe["evidence"].(map[string]any)) != 1 {
+		t.Fatalf("evidence: %v", recipe["evidence"])
+	}
+	props := pkg["properties"].([]any)
+	if len(props) != 1 || props[0].(map[string]any)["value"] != "component-1" {
+		t.Fatalf("recipe link: %v", props)
+	}
+	if !strings.Contains(strings.Join(quality.Warnings, "\n"), "invalid CPE") {
+		t.Fatalf("warnings: %v", quality.Warnings)
+	}
+}

@@ -102,7 +102,10 @@ type Prepared struct {
 	ScanRoot string
 	Root     RootHint
 	Graph    GraphSource
-	Sidecars []OutputFile
+	// SerialNumber, when set (urn:uuid:...), becomes the SBOM's serialNumber,
+	// so a sidecar can point into the SBOM with a BOM-Link.
+	SerialNumber string
+	Sidecars     []OutputFile
 	// Firmware is set only by the firmware-image handler.
 	Firmware *FirmwareInfo
 	// Provenance is recorded under provenance.json "extensions"[target type].

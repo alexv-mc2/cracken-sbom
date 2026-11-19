@@ -357,9 +357,14 @@ func applyTR(doc map[string]any, hints map[string]*componentHints, p *Prepared, 
 		return errors.New("empty_sbom: no package components")
 	}
 	tr := o.tr
-	serial, err := newSerialNumber()
-	if err != nil {
-		return err
+	serial := p.SerialNumber
+	if serial == "" {
+		var err error
+		if serial, err = newSerialNumber(); err != nil {
+			return err
+		}
+	} else if !serialNumberPattern.MatchString(serial) {
+		return errors.New("invalid SBOM serial number")
 	}
 	doc["specVersion"] = "1.6"
 	doc["serialNumber"] = serial

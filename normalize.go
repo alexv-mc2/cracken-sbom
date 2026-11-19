@@ -275,7 +275,13 @@ type componentHints struct {
 	PkgType, FoundBy, Location string
 	Name, Group, Version       string
 	Creator                    creatorFacts
+	// RecipeRefs are engine bom-refs named by cracken:yocto:recipe; they are
+	// rewritten to the final bom-refs once every component is numbered.
+	RecipeRefs []string
 }
+
+// Further CPEs of one component, kept as evidence.identity entries.
+const maxIdentityCPEs = 64
 
 func normalizeComponent(c map[string]any, ref string, quality *Quality) (map[string]any, error) {
 	return normalizeComponentWithHints(c, ref, quality, &componentHints{})
@@ -322,6 +328,43 @@ func normalizeComponentWithHints(c map[string]any, ref string, quality *Quality,
 			hints.Group = s
 		case "version":
 			hints.Version = s
+		}
+	}
+	if v, exists := c["evidence"]; exists {
+		// Only identity evidence for further CPEs is kept; occurrences,
+		// call stacks, licences and copyright evidence can hold local paths.
+		evidence, ok := v.(map[string]any)
+		if !ok {
+			return nil, errors.New("malformed component evidence")
+		}
+		identity, _ := evidence["identity"].([]any)
+		kept := []any{}
+		seen := map[string]bool{}
+		if primary, ok := out["cpe"].(string); ok {
+			seen[primary] = true
+		}
+		for _, v := range identity {
+			entry, ok := v.(map[string]any)
+			if !ok || entry["field"] != "cpe" {
+				continue
+			}
+			cpe, err := cleanCPE(entry["concludedValue"])
+			if err != nil {
+				addWarning(quality, "Identity evidence with an invalid CPE was omitted.")
+				continue
+			}
+			if seen[cpe] {
+				continue
+			}
+			if len(kept) == maxIdentityCPEs {
+				addWarning(quality, fmt.Sprintf("Only %d further CPEs per component are kept as identity evidence.", maxIdentityCPEs))
+				break
+			}
+			seen[cpe] = true
+			kept = append(kept, map[string]string{"field": "cpe", "concludedValue": cpe})
+		}
+		if len(kept) > 0 {
+			out["evidence"] = map[string]any{"identity": kept}
 		}
 	}
 	if v, exists := c["purl"]; exists {
@@ -482,6 +525,8 @@ func normalizeComponentWithHints(c map[string]any, ref string, quality *Quality,
 				hints.PkgType = value
 			case "syft:location:0:path":
 				hints.Location = value
+			case yoctoRecipeProperty:
+				hints.RecipeRefs = append(hints.RecipeRefs, value)
 			}
 		}
 		if versionString {
@@ -591,6 +636,24 @@ func normalizeDocument(input []byte, ctx ProvenanceContext) (map[string]any, map
 				return nil, nil, quality, errors.New("malformed nested component inventory")
 			}
 			stack = append(stack, children)
+		}
+	}
+	// Links from a Yocto binary package to its recipe component, with the
+	// final bom-refs. A link that names no kept component is dropped.
+	for _, v := range components {
+		component := v.(map[string]any)
+		ref := component["bom-ref"].(string)
+		h := hintsByRef[ref]
+		props, _ := component["properties"].([]any)
+		linked := map[string]bool{}
+		for _, old := range h.RecipeRefs {
+			if target, ok := refs[old]; ok && target != ref && !linked[target] {
+				linked[target] = true
+				props = append(props, map[string]string{"name": yoctoRecipeProperty, "value": target})
+			}
+		}
+		if len(props) > 0 {
+			component["properties"] = props
 		}
 	}
 	quality.EmittedComponents = len(components)

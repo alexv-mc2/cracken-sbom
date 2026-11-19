@@ -67,9 +67,10 @@ var spdx3Justifications = map[string]string{
 var spdx3TimePattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$`)
 
 // spdx3VEX reads security_Vex*VulnAssessmentRelationship elements. An
-// assessment on a recipe applies to the selected packages it generates; one
-// on a package applies to that package. Assessments withdrawn in the past are
-// skipped; an invalid withdrawal time keeps the assessment.
+// assessment on a recipe applies to the recipe's component; one on a package
+// applies to the package's recipe, or to the package when it has none.
+// Assessments withdrawn in the past are skipped; an invalid withdrawal time
+// keeps the assessment.
 // Caps for attacker-shaped VEX data: statements (CVE x assessment), affected
 // (statement, component) pairs, and the bytes of the VEX file.
 var maxVEXStatements = 50000
@@ -80,13 +81,7 @@ func vexCapError(what string, limit int) error {
 	return fmt.Errorf("the Yocto SPDX holds more than %d VEX %s; refused to protect memory, the input looks malformed", limit, what)
 }
 
-func spdx3VEX(g *spdx3Graph, selected map[string]bool, generatedBy map[string][]string) ([]vexStatement, error) {
-	generates := map[string][]string{}
-	for pkg, recipes := range generatedBy {
-		for _, r := range recipes {
-			generates[r] = append(generates[r], pkg)
-		}
-	}
+func spdx3VEX(g *spdx3Graph, selected map[string]bool, recipes *yoctoRecipes) ([]vexStatement, error) {
 	out := []vexStatement{}
 	pairs := 0
 	for _, r := range g.relations {
@@ -123,14 +118,7 @@ func spdx3VEX(g *spdx3Graph, selected map[string]bool, generatedBy map[string][]
 		}
 		targets := []string{}
 		for _, t := range spdx3Refs(r["to"]) {
-			if selected[t] {
-				targets = append(targets, t)
-			}
-			for _, pkg := range generates[t] {
-				if selected[pkg] {
-					targets = append(targets, pkg)
-				}
-			}
+			targets = append(targets, recipes.recipeTargets(t, selected[t])...)
 		}
 		targets = uniqueStrings(targets)
 		if len(targets) == 0 {

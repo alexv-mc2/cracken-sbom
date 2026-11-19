@@ -60,52 +60,91 @@ from pathlib import Path
 out = Path(sys.argv[1])
 expected = {
     'yocto-spdx2': {
-        'components': {('busybox', '1.36.1-r0'), ('libz1', '1.3.1-r0')},
+        'components': {('busybox', '1.36.1-r0'), ('libz1', '1.3.1-r0'), ('busybox', '1.36.1'), ('zlib', '1.3.1')},
+        'links': {'busybox': 'busybox', 'libz1': 'zlib'},
         'product': ('core-image-minimal-qemux86-64', '1.0'),
         'vex': {('CVE-2022-28391', 'resolved', 'busybox'), ('CVE-2022-30065', 'resolved', 'busybox'), ('CVE-2023-42364', 'resolved', 'busybox')},
     },
     'yocto-spdx3': {
-        'components': {('busybox', '1.36.1'), ('libz1', '1.3.1'), ('libssl3', '3.2.3')},
+        'components': {('busybox', '1.36.1'), ('libz1', '1.3.1'), ('libssl3', '3.2.3'), ('zlib', '1.3.1'), ('openssl', '3.2.3')},
+        'links': {'busybox': 'busybox', 'libz1': 'zlib', 'libssl3': 'openssl'},
         'product': ('core-image-minimal-qemux86-64.rootfs', '1.0'),
         'vex': {('CVE-2023-42364', 'resolved', 'busybox'), ('CVE-2023-42363', 'not_affected', 'busybox'),
-                ('CVE-2024-0727', 'exploitable', 'libssl3'), ('CVE-2022-37434', 'resolved', 'libz1')},
+                ('CVE-2024-0727', 'exploitable', 'openssl'), ('CVE-2022-37434', 'resolved', 'zlib')},
     },
 }
 expected['yocto-spdx2-tar-zst'] = expected['yocto-spdx2']
-counts = {'yocto-real-scarthgap': (38, {'resolved': 28}), 'yocto-real-wrynose': (38, {'not_affected': 22, 'resolved': 10})}
+# (components, recipe components, CPEs on recipes, VEX states): one component
+# per recipe, packages without CPEs, one VEX entry per CVE and recipe.
+counts = {'yocto-real-scarthgap': (62, 24, 26, {'resolved': 28}), 'yocto-real-wrynose': (65, 27, 28, {'not_affected': 22, 'resolved': 10})}
 counts['yocto-real-detect-build'] = counts['yocto-real-detect-images'] = counts['yocto-real-scarthgap']
 counts['yocto-real-detect-wrynose'] = counts['yocto-real-wrynose']
+
+def recipe_model(case, sbom):
+    """Packages link to a recipe component and carry no CPE; recipes carry them all."""
+    by_ref = {c['bom-ref']: c for c in sbom['components']}
+    links, recipes = {}, set()
+    for c in sbom['components']:
+        for p in c.get('properties', []):
+            if p['name'] == 'cracken:yocto:recipe':
+                assert p['value'] in by_ref, f'{case}: {c["name"]} links to unknown {p["value"]}'
+                assert 'cpe' not in c and 'evidence' not in c, f'{case}: package {c["name"]} carries a CPE'
+                links[c['name']] = by_ref[p['value']]['name']
+                recipes.add(p['value'])
+    cpes = 0
+    for c in sbom['components']:
+        ident = c.get('evidence', {}).get('identity', [])
+        assert all(i['field'] == 'cpe' and i['concludedValue'].startswith('cpe:') for i in ident), f'{case}: identity evidence'
+        if 'cpe' in c:
+            assert c['bom-ref'] in recipes or not any(p['name'] == 'cracken:yocto:recipe' for p in c.get('properties', [])), f'{case}: CPE outside a recipe'
+            cpes += 1 + len(ident)
+    return by_ref, links, recipes, cpes
+
+def vex_targets(case, sbom, vex):
+    """Every affects[].ref is a BOM-Link into this SBOM, without versions."""
+    serial = sbom['serialNumber']
+    assert serial.startswith('urn:uuid:'), f'{case}: SBOM serial'
+    prefix = 'urn:cdx:' + serial[len('urn:uuid:'):] + '/1#'
+    assert {'name': 'cracken:vex:sbom:serial', 'value': serial} in vex['metadata']['properties'], f'{case}: VEX names the SBOM serial'
+    for v in vex['vulnerabilities']:
+        for a in v['affects']:
+            assert a['ref'].startswith(prefix), f'{case}: {a["ref"]} is not a BOM-Link to this SBOM'
+            assert 'versions' not in a, f'{case}: versions on a recipe statement'
+            yield v, a['ref'][len(prefix):]
+
 for case in sys.argv[2:]:
     if case in counts:
         sbom = json.loads((out/case/'sbom.cdx.json').read_text())
         vex = json.loads((out/case/'sbom.vex.cdx.json').read_text())
         assert 'vulnerabilities' not in sbom, f'{case}: vulnerability data inside the SBOM'
-        refs = {c['bom-ref'] for c in sbom['components']}
-        states = {}
-        for v in vex['vulnerabilities']:
+        by_ref, links, recipes, cpes = recipe_model(case, sbom)
+        states, seen = {}, set()
+        for v, ref in vex_targets(case, sbom, vex):
+            assert ref in recipes, f'{case}: VEX names {ref}, not a recipe component'
+            assert (v['id'], ref) not in seen, f'{case}: duplicate statement'
+            seen.add((v['id'], ref))
             states[v['analysis']['state']] = states.get(v['analysis']['state'], 0) + 1
-            assert all(a['ref'] in refs for a in v['affects']), f'{case}: unresolved VEX reference'
-        assert (len(sbom['components']), states) == counts[case], f'{case}: {len(sbom["components"])} components, {states}'
+        got = (len(sbom['components']), len(recipes), cpes, states)
+        assert got == counts[case], f'{case}: {got}'
         assert 'DocumentRef' not in (out/case/'sbom.cdx.json').read_text(), f'{case}: cross-document reference kept'
-        print(f'PASS real Yocto {case}: {len(refs)} components, VEX {states}, all references resolve')
+        print(f'PASS real Yocto {case}: {got[0]} components ({got[1]} recipes, {got[2]} CPEs, all on recipes), VEX {states} on recipes by BOM-Link')
         continue
     want = expected[case]
     sbom = json.loads((out/case/'sbom.cdx.json').read_text())
     assert 'vulnerabilities' not in sbom, f'{case}: vulnerability data inside the SBOM'
     comps = {(c['name'], c.get('version')) for c in sbom['components']}
     assert comps == want['components'], f'{case}: components {comps!r}'
+    by_ref, links, recipes, cpes = recipe_model(case, sbom)
+    assert links == want['links'], f'{case}: recipe links {links!r}'
     root = sbom['metadata']['component']
     assert (root['name'], root['version']) == want['product'], f'{case}: product {root!r}'
-    by_ref = {c['bom-ref']: c for c in sbom['components']}
     vex = json.loads((out/case/'sbom.vex.cdx.json').read_text())
     assert vex['specVersion'] == '1.6' and not vex.get('components'), f'{case}: VEX shape'
     got = set()
-    for v in vex['vulnerabilities']:
-        for a in v['affects']:
-            comp = by_ref.get(a['ref'])
-            assert comp, f'{case}: VEX reference {a["ref"]} is not an SBOM bom-ref'
-            assert a['versions'][0]['version'] == comp['version'], f'{case}: VEX version mismatch'
-            got.add((v['id'], v['analysis']['state'], comp['name']))
+    for v, ref in vex_targets(case, sbom, vex):
+        comp = by_ref.get(ref)
+        assert comp, f'{case}: VEX reference {ref} is not an SBOM bom-ref'
+        got.add((v['id'], v['analysis']['state'], comp['name']))
     assert got == want['vex'], f'{case}: VEX {got!r}'
     prov = json.loads((out/case/'provenance.json').read_text())
     outputs = {o['name'] for o in prov.get('extra_outputs', [])}
@@ -113,7 +152,7 @@ for case in sys.argv[2:]:
     text = (out/case/'sbom.cdx.json').read_text() + (out/case/'sbom.vex.cdx.json').read_text()
     for marker in ('fixtures/yocto', '/Users/', '/home/', 'spdx.org/spdxdocs', 'Applet disabled'):
         assert marker not in text, f'{case}: leaked {marker!r}'
-    print(f'PASS Yocto {case}: CycloneDX 1.6 SBOM and separate VEX ({len(got)} statements) with SBOM bom-refs')
+    print(f'PASS Yocto {case}: CycloneDX 1.6 SBOM with recipe components and separate VEX ({len(got)} statements) by BOM-Link')
 PY
 
 # cracken-upload.zip is the native SPDX, byte for byte, under the original

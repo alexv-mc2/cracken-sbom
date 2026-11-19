@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -18,13 +20,23 @@ type vexTarget struct {
 }
 
 var cycloneDXStates = map[vexState]string{vexFixed: "resolved", vexNotAffected: "not_affected", vexAffected: "exploitable"}
-var versionStatus = map[vexState]string{vexFixed: "unaffected", vexNotAffected: "unaffected", vexAffected: "affected"}
+var serialNumberPattern = regexp.MustCompile(`^urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
-// buildVEX writes one vulnerability per CVE and state. affects[].ref names
-// the bom-ref of the component in sbom.cdx.json; versions repeats the
-// component version so the file stays readable on its own. The document has
+// bomLink is the CycloneDX BOM-Link to a component of the SBOM with the given
+// serialNumber (urn:uuid:...) and version 1: urn:cdx:<uuid>/1#<bom-ref>.
+func bomLink(sbomSerial, ref string) string {
+	return "urn:cdx:" + strings.TrimPrefix(sbomSerial, "urn:uuid:") + "/1#" + url.PathEscape(ref)
+}
+
+// buildVEX writes one vulnerability per CVE and state. affects[].ref is a
+// BOM-Link to the component in sbom.cdx.json (whose serialNumber is
+// sbomSerial), so it resolves across the two documents; the statement holds
+// for that component as listed, so it carries no versions. The document has
 // no component inventory of its own.
-func buildVEX(statements []vexStatement, refs map[string]vexTarget, timestamp string) ([]byte, int, error) {
+func buildVEX(statements []vexStatement, refs map[string]vexTarget, timestamp, sbomSerial string) ([]byte, int, error) {
+	if !serialNumberPattern.MatchString(sbomSerial) {
+		return nil, 0, errors.New("the VEX file needs the SBOM serial number")
+	}
 	type key struct {
 		cve           string
 		state         vexState
@@ -85,6 +97,7 @@ func buildVEX(statements []vexStatement, refs map[string]vexTarget, timestamp st
 			"tools":     []any{map[string]any{"name": "cracken-sbom", "version": toolVersion}},
 			"properties": []any{
 				map[string]any{"name": "cracken:vex:sbom", "value": "sbom.cdx.json"},
+				map[string]any{"name": "cracken:vex:sbom:serial", "value": sbomSerial},
 				map[string]any{"name": "cracken:vex:source", "value": strings.Join(sourceList, ",")},
 			},
 		},
@@ -105,11 +118,7 @@ func buildVEX(statements []vexStatement, refs map[string]vexTarget, timestamp st
 		sort.Slice(targets, func(a, b int) bool { return targets[a].Ref < targets[b].Ref })
 		affects := []any{}
 		for _, t := range targets {
-			entry := map[string]any{"ref": t.Ref}
-			if t.Version != "" {
-				entry["versions"] = []any{map[string]any{"version": t.Version, "status": versionStatus[k.state]}}
-			}
-			affects = append(affects, entry)
+			affects = append(affects, map[string]any{"ref": bomLink(sbomSerial, t.Ref)})
 		}
 		analysis := map[string]any{"state": cycloneDXStates[k.state]}
 		if k.justification != "" && k.state == vexNotAffected {

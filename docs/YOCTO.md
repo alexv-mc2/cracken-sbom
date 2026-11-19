@@ -87,8 +87,7 @@ from downloads.yoctoproject.org (38 components, 32 CVEs: 22 `not_affected`,
 `CRACKEN_SBOM_YOCTO_SPDX3_SAMPLE` to a local copy when running
 `tests/run-tests.sh`.
 
-crAcken imports a CycloneDX VEX one finding at a time. To have crAcken apply
-all of the build's patched-CVE data at once, upload the native SPDX as below.
+For crAcken, upload the build's native SPDX ZIP as described below; the CycloneDX 1.6 SBOM and the VEX file are the files for BSI TR-03183-2 and your customers, not for crAcken.
 
 ## Choose the instructions for your release
 

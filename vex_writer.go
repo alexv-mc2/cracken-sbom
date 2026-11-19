@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -52,14 +53,6 @@ func buildVEX(statements []vexStatement, refs map[string]vexTarget, timestamp st
 			sources[s.Source] = true
 		}
 	}
-	entries := 0
-	for _, targets := range grouped {
-		entries += len(targets)
-	}
-	// About 160 bytes per indented affects entry: refuse before encoding.
-	if entries*160 > maxVEXBytes {
-		return nil, 0, fmt.Errorf("the VEX file would exceed %d MiB; refused to protect memory, the input looks malformed", maxVEXBytes>>20)
-	}
 	keys := make([]key, 0, len(grouped))
 	for k := range grouped {
 		keys = append(keys, k)
@@ -73,7 +66,37 @@ func buildVEX(statements []vexStatement, refs map[string]vexTarget, timestamp st
 		}
 		return keys[i].justification < keys[j].justification
 	})
-	vulnerabilities := []any{}
+	if len(keys) == 0 {
+		return nil, 0, nil
+	}
+	serial, err := newSerialNumber()
+	if err != nil {
+		return nil, 0, err
+	}
+	sourceList := make([]string, 0, len(sources))
+	for s := range sources {
+		sourceList = append(sourceList, s)
+	}
+	sort.Strings(sourceList)
+	doc := map[string]any{
+		"bomFormat": "CycloneDX", "specVersion": "1.6", "serialNumber": serial, "version": 1,
+		"metadata": map[string]any{
+			"timestamp": timestamp,
+			"tools":     []any{map[string]any{"name": "cracken-sbom", "version": toolVersion}},
+			"properties": []any{
+				map[string]any{"name": "cracken:vex:sbom", "value": "sbom.cdx.json"},
+				map[string]any{"name": "cracken:vex:source", "value": strings.Join(sourceList, ",")},
+			},
+		},
+		"vulnerabilities": []any{},
+	}
+	// The encoding is built from its parts so that its exact size is known
+	// before the next part is materialised: the document with an empty
+	// vulnerabilities list, then each vulnerability indented as it appears.
+	enc := newVEXEncoder(doc)
+	if enc == nil {
+		return nil, 0, errors.New("cannot encode the VEX file")
+	}
 	for i, k := range keys {
 		targets := make([]vexTarget, 0, len(grouped[k]))
 		for _, t := range grouped[k] {
@@ -100,44 +123,84 @@ func buildVEX(statements []vexStatement, refs map[string]vexTarget, timestamp st
 		case vexAffected:
 			analysis["detail"] = "The Yocto build assesses this CVE as affecting the package."
 		}
-		vulnerabilities = append(vulnerabilities, map[string]any{
+		if err := enc.add(map[string]any{
 			"bom-ref":  fmt.Sprintf("vex-%d", i+1),
 			"id":       k.cve,
 			"source":   map[string]any{"name": "NVD", "url": "https://nvd.nist.gov/vuln/detail/" + k.cve},
 			"analysis": analysis,
 			"affects":  affects,
-		})
+		}); err != nil {
+			return nil, 0, err
+		}
 	}
-	if len(vulnerabilities) == 0 {
-		return nil, 0, nil
-	}
-	serial, err := newSerialNumber()
+	return enc.bytes(), len(keys), nil
+}
+
+// vexEncoder produces exactly json.MarshalIndent(doc, "", "  ") plus a final
+// newline, where doc's "vulnerabilities" list is filled element by element.
+// size() is the exact length of the file so far; add refuses an element that
+// would take it above maxVEXBytes, before keeping it.
+type vexEncoder struct {
+	head, tail []byte // around the "[]" of the empty vulnerabilities list
+	elems      [][]byte
+	size       int
+}
+
+const vexElemPrefix = "    " // the vulnerabilities array sits at depth 1
+
+func newVEXEncoder(doc map[string]any) *vexEncoder {
+	base, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
-		return nil, 0, err
+		return nil
 	}
-	sourceList := make([]string, 0, len(sources))
-	for s := range sources {
-		sourceList = append(sourceList, s)
+	marker := []byte(`"vulnerabilities": []`)
+	i := bytes.LastIndex(base, marker)
+	if i < 0 {
+		return nil
 	}
-	sort.Strings(sourceList)
-	doc := map[string]any{
-		"bomFormat": "CycloneDX", "specVersion": "1.6", "serialNumber": serial, "version": 1,
-		"metadata": map[string]any{
-			"timestamp": timestamp,
-			"tools":     []any{map[string]any{"name": "cracken-sbom", "version": toolVersion}},
-			"properties": []any{
-				map[string]any{"name": "cracken:vex:sbom", "value": "sbom.cdx.json"},
-				map[string]any{"name": "cracken:vex:source", "value": strings.Join(sourceList, ",")},
-			},
-		},
-		"vulnerabilities": vulnerabilities,
+	cut := i + len(marker) - 2
+	e := &vexEncoder{head: base[:cut], tail: base[cut+2:]}
+	e.size = len(e.head) + len("[]") + len(e.tail) + 1
+	return e
+}
+
+// growth is what one more element adds: "[\n    " + elem + "\n  ]" for the
+// first one (replacing "[]"), ",\n    " + elem for each further one.
+func (e *vexEncoder) growth(elem []byte) int {
+	if len(e.elems) == 0 {
+		return len("\n"+vexElemPrefix) + len(elem) + len("\n  ")
 	}
-	out, err := json.MarshalIndent(doc, "", "  ")
+	return len(",\n"+vexElemPrefix) + len(elem)
+}
+
+func (e *vexEncoder) add(v any) error {
+	elem, err := json.MarshalIndent(v, vexElemPrefix, "  ")
 	if err != nil {
-		return nil, 0, errors.New("cannot encode the VEX file")
+		return errors.New("cannot encode the VEX file")
 	}
-	if len(out) > maxVEXBytes {
-		return nil, 0, fmt.Errorf("the VEX file would exceed %d MiB; refused to protect memory, the input looks malformed", maxVEXBytes>>20)
+	if e.size+e.growth(elem) > maxVEXBytes {
+		return fmt.Errorf("the VEX file would exceed %d MiB; refused to protect memory, the input looks malformed", maxVEXBytes>>20)
 	}
-	return append(out, '\n'), len(vulnerabilities), nil
+	e.size += e.growth(elem)
+	e.elems = append(e.elems, elem)
+	return nil
+}
+
+func (e *vexEncoder) bytes() []byte {
+	out := make([]byte, 0, e.size)
+	out = append(out, e.head...)
+	out = append(out, '[')
+	for i, elem := range e.elems {
+		if i > 0 {
+			out = append(out, ',')
+		}
+		out = append(out, "\n"+vexElemPrefix...)
+		out = append(out, elem...)
+	}
+	if len(e.elems) > 0 {
+		out = append(out, "\n  "...)
+	}
+	out = append(out, ']')
+	out = append(out, e.tail...)
+	return append(out, '\n')
 }

@@ -116,6 +116,9 @@ func RunGenerate(ctx context.Context, o generateOptions, env Env) error {
 	if outputName == "sbom.cdx.zip" {
 		_, _ = fmt.Fprintln(stdout, "In the crAcken web app, select ZIP archive under SPDX upload method. The public API accepts Content-Type: application/zip (16 MiB compressed and unpacked; HTTP 413 archive_too_large for compressed size or archive_unpacked_too_large for unpacked size).")
 	}
+	for _, n := range prepared.Notices {
+		_, _ = fmt.Fprintln(stdout, n)
+	}
 	if prepared.Firmware != nil {
 		_, _ = fmt.Fprintln(stdout, "The inventory comes from a best-effort local extraction of the image; see the firmware block in provenance.json and the warnings in quality.json.")
 	}

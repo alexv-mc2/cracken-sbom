@@ -21,7 +21,10 @@ import (
 // fakeConvertEngine stands in for `syft convert`: it emits one CycloneDX
 // component per SPDX package with the bom-ref shapes Syft 1.55 uses
 // (package-id qualifier for SPDX 3, SPDXID without "SPDXRef-" for SPDX 2).
-type fakeConvertEngine struct{ calls int }
+type fakeConvertEngine struct {
+	calls     int
+	inputSize int
+}
 
 func (f *fakeConvertEngine) Scan(context.Context, string, string, string) ([]byte, error) {
 	return nil, errors.New("scan not expected")
@@ -33,6 +36,7 @@ func (f *fakeConvertEngine) Convert(_ context.Context, _ string, input string) (
 	if err != nil {
 		return nil, err
 	}
+	f.inputSize = len(data)
 	components := []any{}
 	if g, err := parseSPDX3(data); err == nil {
 		for _, n := range g.nodes {
@@ -616,5 +620,107 @@ func TestDocumentLinkToFIFOIsRefused(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("reading a FIFO blocked")
+	}
+}
+
+func TestVEXSizeIsExactAtTheCap(t *testing.T) {
+	defer func(v int) { maxVEXBytes = v }(maxVEXBytes)
+	refs := map[string]vexTarget{}
+	targets := []string{}
+	for i := 0; i < 53; i++ {
+		k := fmt.Sprintf("p%d", i)
+		refs[k] = vexTarget{Ref: fmt.Sprintf("component-%d", i+1), Name: "n", Version: "1.0-r0"}
+		targets = append(targets, k)
+	}
+	statements := []vexStatement{}
+	for i := 0; i < 2000; i++ {
+		statements = append(statements, vexStatement{CVE: fmt.Sprintf("CVE-2026-%05d", i), State: vexFixed, Targets: targets, Source: "s"})
+	}
+	// The real encoded size decides, in both directions: 2,000 CVEs x 53
+	// refs with versions is above 16 MiB, so it is refused ...
+	if _, _, err := buildVEX(statements, refs, "2026-11-19T00:00:00Z"); err == nil {
+		t.Fatal("2000 x 53 with versions is above 16 MiB and must be refused")
+	}
+	// ... while the same CVEs on 30 refs are below it and pass.
+	for i := range statements {
+		statements[i].Targets = targets[:30]
+	}
+	data, n, err := buildVEX(statements, refs, "2026-11-19T00:00:00Z")
+	if err != nil || n != 2000 || len(data) > 16<<20 {
+		t.Fatalf("2000 x 30: %d bytes, %v", len(data), err)
+	}
+	t.Logf("2000 x 30: %d bytes", len(data))
+	var doc map[string]any
+	if json.Unmarshal(data, &doc) != nil {
+		t.Fatal("invalid VEX JSON")
+	}
+	want, _ := json.MarshalIndent(doc, "", "  ")
+	if !bytes.Equal(data, append(want, '\n')) {
+		t.Fatal("the part-wise encoding differs from json.MarshalIndent")
+	}
+	small := statements[:40]
+	exact, _, err := buildVEX(small, refs, "2026-11-19T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	maxVEXBytes = len(exact)
+	if _, _, err := buildVEX(small, refs, "2026-11-19T00:00:00Z"); err != nil {
+		t.Fatalf("exactly at the cap must pass: %v", err)
+	}
+	maxVEXBytes = len(exact) - 1
+	if _, _, err := buildVEX(small, refs, "2026-11-19T00:00:00Z"); err == nil || !strings.Contains(err.Error(), "would exceed") {
+		t.Fatalf("one byte over the cap must fail: %v", err)
+	}
+}
+
+func TestMergedSPDX2SizeIsExactAtTheCap(t *testing.T) {
+	defer func(v int) { maxYoctoMergedBytes = v }(maxYoctoMergedBytes)
+	// Long supplier, originator and copied externalRefs all count.
+	dir := spdx2Attack(t, 30, 3)
+	file := filepath.Join(dir, "pkgs.spdx.json")
+	var doc map[string]any
+	data, _ := os.ReadFile(file)
+	_ = json.Unmarshal(data, &doc)
+	for _, p := range doc["packages"].([]any) {
+		m := p.(map[string]any)
+		m["supplier"] = "Organization: " + strings.Repeat("s", 300)
+		m["originator"] = "Person: " + strings.Repeat("o", 300)
+		m["licenseDeclared"] = "MIT AND Apache-2.0"
+	}
+	data, _ = json.Marshal(doc)
+	_ = os.WriteFile(file, data, 0600)
+	set := fixtureSet(t, dir)
+	engine := &fakeConvertEngine{}
+	if _, err := convertYoctoSPDX2(context.Background(), set.docs, t.TempDir(), "syft", engine); err != nil {
+		t.Fatal(err)
+	}
+	size := engine.inputSize
+	maxYoctoMergedBytes = size
+	if _, err := convertYoctoSPDX2(context.Background(), set.docs, t.TempDir(), "syft", &fakeConvertEngine{}); err != nil {
+		t.Fatalf("exactly at the cap must pass: %v", err)
+	}
+	maxYoctoMergedBytes = size - 1
+	if _, err := convertYoctoSPDX2(context.Background(), set.docs, t.TempDir(), "syft", &fakeConvertEngine{}); err == nil || !strings.Contains(err.Error(), "would exceed") {
+		t.Fatalf("one byte over the cap must fail: %v", err)
+	}
+}
+
+func TestMissingUploadFileIsSaidOnTheConsole(t *testing.T) {
+	partial := t.TempDir()
+	copyTree(t, filepath.Join("fixtures", "yocto", "spdx2"), partial)
+	_ = os.Remove(filepath.Join(partial, "recipe-zlib.spdx.json"))
+	dir := t.TempDir()
+	syft := filepath.Join(dir, "syft")
+	_ = os.WriteFile(syft, []byte("x"), 0700)
+	o, err := parseOptions([]string{"--target-type", "yocto", "--target", partial, "--target-id", "y", "--output", filepath.Join(dir, "o"), "--syft", syft})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := RunGenerate(context.Background(), o, Env{Engine: &fakeConvertEngine{}, Now: fixedNow, Stdout: &out}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "cracken-upload.zip was NOT written:") || !strings.Contains(out.String(), "--strict-upload") {
+		t.Fatalf("console:\n%s", out.String())
 	}
 }

@@ -25,7 +25,7 @@ jobs:
   build:
     needs: test
     # GitHub-hosted on purpose (public repo): provenance must come from a GitHub-hosted runner, because
-    # docs/VERIFICATION.md verifies with --deny-self-hosted-runners. Other jobs stay on Ubicloud.
+    # docs/VERIFICATION.md verifies with --deny-self-hosted-runners.
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -64,7 +64,7 @@ jobs:
   publish:
     needs: build
     # GitHub-hosted on purpose (public repo): provenance must come from a GitHub-hosted runner, because
-    # docs/VERIFICATION.md verifies with --deny-self-hosted-runners. Other jobs stay on Ubicloud.
+    # docs/VERIFICATION.md verifies with --deny-self-hosted-runners.
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -117,7 +117,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubicloud-standard-2, macos-15]
+        os: [ubuntu-24.04, macos-15]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
@@ -153,7 +153,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubicloud-standard-2, macos-15]
+        os: [ubuntu-24.04, macos-15]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
@@ -204,7 +204,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubicloud-standard-2, macos-15]
+        os: [ubuntu-24.04, macos-15]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
